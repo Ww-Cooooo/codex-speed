@@ -8,7 +8,7 @@ TPS 指每秒输出的 token 数。这里显示的是**每轮输出完成后的�
 
 ## 开始使用
 
-1. 在 [GitHub Releases](https://github.com/Ww-Cooooo/codex-speed/releases/latest) 下载 `Codex-Speed-0.1.1-win-x64.exe`。
+1. 在 [GitHub Releases](https://github.com/Ww-Cooooo/codex-speed/releases/latest) 下载 `Codex-Speed-0.1.2-win-x64.exe`。
 2. 双击 EXE，直接打开统计窗口。**无需安装 Node.js、Python 或 Git，无需管理员权限或重启 Codex。**
 3. 在本机 Codex 中完成一次输出，在对应对话卡片中查看速度。首次打开会分批补读，部分记录可能显示“待测”或缺少可信计时。
 
@@ -20,7 +20,7 @@ TPS 指每秒输出的 token 数。这里显示的是**每轮输出完成后的�
 
 输出已结束的对话可能在收起的“未运行”或“状态待确认”分组中，点组头即可展开；查看子任务时，在三个点菜单中开启“显示子任务”。
 
-默认读取当前用户的 `.codex` 目录。正式统计已打开时，再次打开 EXE 会恢复现有窗口。需要先看示例时，可在 PowerShell 中运行 `& '.\Codex-Speed-0.1.1-win-x64.exe' --demo`；示例使用合成数据、不读取你的 Codex，先退出示例再打开正式统计。
+默认读取当前用户的 `.codex` 目录。正式统计已打开时，再次打开 EXE 会恢复现有窗口。需要先看示例时，可在 PowerShell 中运行 `& '.\Codex-Speed-0.1.2-win-x64.exe' --demo`；示例使用合成数据、不读取你的 Codex，先退出示例再打开正式统计。
 
 ![紧凑面板同时展示多个对话的读数和独立曲线](docs/images/overview.png)
 
@@ -70,7 +70,7 @@ TPS 指每秒输出的 token 数。这里显示的是**每轮输出完成后的�
 
 ```powershell
 $env:CODEX_TPS_CODEX_HOME = 'D:\MyCodexData'
-& '.\Codex-Speed-0.1.1-win-x64.exe'
+& '.\Codex-Speed-0.1.2-win-x64.exe'
 ```
 
 路径是示例，需要替换。来源目录必须与工具的数据目录分开。源码运行同样支持这个变量。EXE 始终使用内置 Python，不使用系统 Python 或 `CODEX_TPS_PYTHON` 指定的解释器。
@@ -123,7 +123,7 @@ npm run build
 npm run package:win
 ```
 
-构建需要联网下载官方 Python 3.13.16 嵌入包，以及 electron-builder 使用的打包工具。脚本先核对固定 SHA-256，再使用 Windows 自带的 `tar.exe` 解压；无需安装系统 Python。生成文件为 `release\Codex-Speed-0.1.1-win-x64.exe`，不会自动上传或发布。完整依赖许可随包保留，Python 来源与校验值见 [第三方声明](THIRD_PARTY_NOTICES.md)。
+构建需要联网下载官方 Python 3.13.16 嵌入包，以及 electron-builder 使用的打包工具。脚本先核对固定 SHA-256，再使用 Windows 自带的 `tar.exe` 解压；无需安装系统 Python。生成文件为 `release\Codex-Speed-0.1.2-win-x64.exe`，不会自动上传或发布。完整依赖许可随包保留，Python 来源与校验值见 [第三方声明](THIRD_PARTY_NOTICES.md)。
 
 ## 许可与致谢
 

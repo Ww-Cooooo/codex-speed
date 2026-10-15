@@ -616,7 +616,7 @@ export default function App() {
         <span className="compact-caption">{rows.length} 个对话 · 展开后同时查看</span>
       </section>
       <section id="conversation-workspace" ref={workspace} className="workspace" aria-hidden={!expanded} inert={!expanded}>
-        <div className="monitor-heading"><div><h1>一起监看</h1><span>每个对话，都在自己的位置。</span></div><div className="monitor-active"><i/><b>{runningCount}</b><span>正在运行</span></div></div>
+        <div className="monitor-heading"><div><h1>输出速度</h1><span>查看各对话的速度和运行状态。</span></div><div className="monitor-active"><i/><b>{runningCount}</b><span>正在运行</span></div></div>
         <div className="overview-toolbar no-drag">
           <div className="overview-heading"><span>{rows.length} 个对话</span><span className="overview-view-label">{groupedView ? '按状态分组' : '固定顺序'}</span></div>
           <Tooltip title="均值按本机日期筛选；运行中的对话始终保留。" placement="bottomRight"><Select<Period> value={period} aria-label="统计时段" size="small" className="period-select" options={(Object.keys(periodLabels) as Period[]).map((value) => ({ value, label: periodLabels[value] }))} onChange={(value) => { captureReadingLayout(); setPeriod(value); setSelectedProfile(null); }} open={periodOpen} onOpenChange={setPeriodOpen} popupMatchSelectWidth={110} getPopupContainer={() => document.body} /></Tooltip>
