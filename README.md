@@ -89,7 +89,7 @@ node --experimental-strip-types --test src/statistics.test.ts src/chart-range.te
 # 后端合成数据、计时、配置关联与只读边界
 py -3.12 -B -m unittest discover -s backend/tests
 
-# 重新构建；退出旧工具后，再打开启动入口
+# 先退出已打开的小工具，再重新构建并打开启动入口
 npm run build
 ```
 
