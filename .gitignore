@@ -1,5 +1,8 @@
 node_modules/
 dist/
+build/
+vendor/
+release/
 __pycache__/
 *.py[cod]
 *.sqlite*

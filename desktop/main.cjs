@@ -6,12 +6,13 @@ const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { fileURLToPath } = require('node:url');
+const { resolveMode, resolveWorkerRuntime } = require('./runtime.cjs');
 const { sanitizeSnapshot, sanitizeConversationOrder, sanitizeExpandedSize, clampExpandedSize,
   clampBounds, STATUS_MESSAGES, pathsOverlap, WINDOW_WIDTH, EXPANDED_HEIGHT, COLLAPSED_HEIGHT,
   MIN_WINDOW_WIDTH, MIN_EXPANDED_HEIGHT, MAX_WINDOW_DIMENSION, MAX_PREFERENCES_BYTES } = require('./validation.cjs');
 
 const args = new Set(process.argv.slice(1));
-const mode = args.has('--live') ? 'live' : 'demo';
+const mode = resolveMode(args, app.isPackaged);
 const smokeTest = args.has('--smoke-test');
 const MAX_LINE_BYTES = 8 * 1024 * 1024;
 const sourceRoot = path.resolve(__dirname, '..');
@@ -57,6 +58,7 @@ let savedPosition = null;
 let preferencesTimer = null;
 let loaded = false;
 let smokeFinished = false;
+let smokeExitCode = null;
 let workerStopped = false;
 let shutdownStarted = false;
 let userResizing = false;
@@ -417,17 +419,6 @@ function workerEnvironment() {
   return environment;
 }
 
-function choosePython() {
-  const configured = process.env.CODEX_TPS_PYTHON;
-  if (configured) {
-    if (!path.isAbsolute(configured) || !fs.existsSync(configured)) return null;
-    return { command: configured, prefix: [] };
-  }
-  const installed = path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python312', 'python.exe');
-  if (fs.existsSync(installed)) return { command: installed, prefix: [] };
-  return process.platform === 'win32' ? { command: 'py.exe', prefix: ['-3.12'] } : { command: 'python3', prefix: [] };
-}
-
 function publishUnavailable(status = 'error') {
   latestSnapshot = {
     schemaVersion: 3, mode, status, message: STATUS_MESSAGES[status],
@@ -437,12 +428,12 @@ function publishUnavailable(status = 'error') {
 }
 
 function startWorker() {
-  const python = choosePython();
+  const python = resolveWorkerRuntime({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, sourceRoot });
   if (!python) { publishUnavailable(); finishSmoke(false, 'python-unavailable'); return; }
-  const argv = [...python.prefix, '-I', path.join(sourceRoot, 'backend', 'monitor.py'), '--mode', mode, '--data-dir', path.join(dataRoot, 'data'), '--scratch-dir', scratchRoot];
+  const argv = [...python.prefix, '-I', '-X', 'utf8', '-B', python.monitorPath, '--mode', mode, '--data-dir', path.join(dataRoot, 'data'), '--scratch-dir', scratchRoot];
   if (mode === 'live') argv.push('--codex-home', liveSource);
   worker = spawn(python.command, argv, {
-    cwd: sourceRoot, shell: false, windowsHide: true,
+    cwd: python.cwd, shell: false, windowsHide: true,
     stdio: ['pipe', 'pipe', 'pipe'], env: workerEnvironment(),
   });
   let pending = Buffer.alloc(0);
@@ -489,7 +480,7 @@ function finishSmoke(success, reason) {
   if (!smokeTest || smokeFinished) return;
   smokeFinished = true;
   process.stdout.write(JSON.stringify({ smoke: success ? 'passed' : 'failed', mode, reason }) + '\n');
-  process.exitCode = success ? 0 : 1;
+  smokeExitCode = success ? 0 : 1;
   app.quit();
 }
 
@@ -550,7 +541,13 @@ if (!app.requestSingleInstanceLock()) {
       setTimeout(resume, 750);
     } else resume();
   });
-  app.on('will-quit', () => { removeDemoRoot(); removeScratchRoot(); });
+  app.on('will-quit', () => {
+    removeDemoRoot();
+    removeScratchRoot();
+    // Electron app.quit() does not carry Node's process.exitCode. Preserve the
+    // normal worker shutdown and cleanup, then return the actual smoke result.
+    if (smokeExitCode !== null) app.exit(smokeExitCode);
+  });
   app.on('window-all-closed', () => { if (!quitting) app.quit(); });
   app.whenReady().then(() => {
     createWindow();

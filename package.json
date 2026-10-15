@@ -1,6 +1,6 @@
 {
   "name": "codex-speed",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Local read-only Codex output speed monitor",
   "type": "module",
@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "demo": "electron . --demo",
     "start": "electron . --live",
-    "smoke": "electron . --demo --smoke-test"
+    "smoke": "electron . --demo --smoke-test",
+    "package:win": "tsc --noEmit && vite build --outDir build/frontend && node scripts/prepare-package.cjs && electron-builder --config electron-builder.cjs --win portable --x64 --publish never"
   },
   "dependencies": {
     "@ant-design/icons": "6.3.4",
@@ -28,6 +29,7 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "electron": "44.7.0",
+    "electron-builder": "26.15.3",
     "typescript": "7.0.2",
     "vite": "8.3.4"
   },

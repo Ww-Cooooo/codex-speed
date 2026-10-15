@@ -4,27 +4,23 @@
 
 Codex Speed 是一个 Windows 桌面小工具，读取本机 Codex 的会话与计时记录，分别显示各个对话的最近完成速度、同配置均值和历史曲线。多个窗口一起工作时，可以同时观察；模型、思考强度或 Fast 设置不同，也不会被混成一个平均数。
 
-TPS 指每秒输出的 token 数。这里显示的是**每轮输出完成后的速度估算**，不会在生成过程中逐 token 更新。前端、桌面层和统计后端源码均在本仓库；当前提供源码运行方式，没有独立安装包。
+TPS 指每秒输出的 token 数。这里显示的是**每轮输出完成后的速度估算**，不会在生成过程中逐 token 更新。前端、桌面层和统计后端源码均在本仓库。
 
 ## 开始使用
 
-需要 **Windows、Git、Node.js 24 和 Python 3.12**；当前验证环境为 Windows x64，其他系统与架构尚未验证。安装 Python 时建议保留 Python Launcher，便于运行 `py -3.12 --version` 检查；不用 Launcher 时，可按下文指定 Python 可执行文件。首次安装需要联网下载依赖和 Electron；使用面板时不向外发送统计数据，无需管理员权限或重启 Codex。
+1. 在 [GitHub Releases](https://github.com/Ww-Cooooo/codex-speed/releases/latest) 下载 `Codex-Speed-0.1.1-win-x64.exe`。
+2. 双击 EXE，直接打开统计窗口。**无需安装 Node.js、Python 或 Git，无需管理员权限或重启 Codex。**
+3. 在本机 Codex 中完成一次输出，在对应对话卡片中查看速度。首次打开会分批补读，部分记录可能显示“待测”或缺少可信计时。
 
-在 PowerShell 中运行：
+当前提供 **Windows x64 便携版**，已在 Windows 10 x64 上验证；其他系统与架构尚未验证。EXE 内置 Electron 和 Python，启动时解压到临时目录，正常退出后清理运行文件。统计历史与窗口设置保存在 `%LOCALAPPDATA%\CodexTPS`，不会随临时文件删除。
 
-```powershell
-git clone https://github.com/Ww-Cooooo/codex-speed.git
-cd codex-speed
-npm ci
-npm run build
-.\启动演示.cmd
-```
+更新时，先用右上角关闭按钮或托盘菜单彻底退出旧版，再打开新版 EXE；已有统计历史和设置继续沿用。最小化到托盘仍在运行，不能算退出。
 
-演示窗口带有“示例”标记，使用合成数据，不读取你的 Codex。确认能打开后，用右上角关闭按钮退出演示，再双击 `启动统计.cmd`。工具默认读取当前用户的 `.codex` 目录；在 Codex 中完成一次输出后，可在对应对话卡片中查看速度。首次打开会分批补读，部分记录可能显示“待测”或缺少可信计时。
+发布包尚未进行代码签名，Windows 可能显示发行者未知的提示。Release 同时提供 `SHA256SUMS.txt`，可用于核对下载文件。
 
 输出已结束的对话可能在收起的“未运行”或“状态待确认”分组中，点组头即可展开；查看子任务时，在三个点菜单中开启“显示子任务”。
 
-请先退出演示再启动统计，避免把示例当成真实读数。正式统计已打开时，再次启动统计入口会恢复现有窗口。
+默认读取当前用户的 `.codex` 目录。正式统计已打开时，再次打开 EXE 会恢复现有窗口。需要先看示例时，可在 PowerShell 中运行 `& '.\Codex-Speed-0.1.1-win-x64.exe' --demo`；示例使用合成数据、不读取你的 Codex，先退出示例再打开正式统计。
 
 ![紧凑面板同时展示多个对话的读数和独立曲线](docs/images/overview.png)
 
@@ -64,27 +60,49 @@ npm run build
 
 会话名称只用于实时显示，不写入统计历史；JSONL 完整记录会在解码时短暂进入内存，再投影为允许的计时与配置字段，不把聊天正文写入历史。
 
-持久数据在 `%LOCALAPPDATA%\CodexTPS`：匿名会话标识、配置、时间、token与计时、排除原因，以及窗口位置、尺寸、置顶和匿名排序。未保存会话名称或正文。删除项目目录不会删除这份数据；需要清空时，先彻底退出工具，再自行备份或删除该目录。公开截图、问题报告或日志前，请检查是否包含你的会话名称。
+持久数据在 `%LOCALAPPDATA%\CodexTPS`：匿名会话标识、配置、时间、token与计时、排除原因，以及窗口位置、尺寸、置顶和匿名排序。未保存会话名称或正文。删除 EXE 或源码目录不会删除这份数据；需要清空时，先彻底退出工具，再自行备份或删除该目录。公开截图、问题报告或日志前，请检查是否包含你的会话名称。
 
 为兼容早期版本，数据目录和环境变量继续沿用 `CodexTPS`／`CODEX_TPS` 名称。
 
-## 自定义来源与开发
+## 自定义来源
 
-如果 `.codex` 不在默认位置，在启动前指定来源目录；Python 位于自定义位置时，指定其可执行文件的绝对路径：
+如果 `.codex` 不在默认位置，在启动前指定来源目录：
 
 ```powershell
 $env:CODEX_TPS_CODEX_HOME = 'D:\MyCodexData'
+& '.\Codex-Speed-0.1.1-win-x64.exe'
+```
+
+路径是示例，需要替换。来源目录必须与工具的数据目录分开。源码运行同样支持这个变量。EXE 始终使用内置 Python，不使用系统 Python 或 `CODEX_TPS_PYTHON` 指定的解释器。
+
+## 源码运行与开发
+
+需要 **Windows、Git、Node.js 24 和 Python 3.12**。安装 Python 时建议保留 Python Launcher，可用 `py -3.12 --version` 检查。首次安装需要联网下载依赖和 Electron。
+
+在 PowerShell 中运行：
+
+```powershell
+git clone https://github.com/Ww-Cooooo/codex-speed.git
+cd codex-speed
+npm ci
+npm run build
+.\启动演示.cmd
+```
+
+演示窗口带有“示例”标记，使用合成数据，不读取你的 Codex。用右上角关闭按钮退出演示后，双击 `启动统计.cmd` 打开实际统计。源码方式也沿用 `%LOCALAPPDATA%\CodexTPS`，与 EXE 共享历史和设置，切换前请彻底退出另一版本。
+
+不用 Python Launcher 或 Python 位于自定义位置时，在启动前指定可执行文件的绝对路径：
+
+```powershell
 $env:CODEX_TPS_PYTHON = 'C:\Path\To\Python312\python.exe'
 .\启动统计.cmd
 ```
 
-上述路径是示例，需要替换。来源目录必须与工具的数据目录分开。
-
-界面采用 React、Ant Design、GSAP、G2、Pts 和 Lenis；Electron 提供窗口与受限通信，Python 标准库负责采集和匿名历史，不需要额外 Python 包。当前在 Windows、Python 3.12 上验证；macOS 和 Linux 尚未验证。
+界面采用 React、Ant Design、GSAP、G2、Pts 和 Lenis；Electron 提供窗口与受限通信，Python 标准库负责采集和匿名历史，不需要额外 Python 包。源码后端在 Python 3.12 上验证，EXE 内置的 Python 3.13.16 也通过后端测试。
 
 ```powershell
 # 前端统计、时间范围和桌面输入边界
-node --experimental-strip-types --test src/statistics.test.ts src/chart-range.test.ts desktop/validation.test.cjs
+node --experimental-strip-types --test src/statistics.test.ts src/chart-range.test.ts desktop/validation.test.cjs desktop/runtime.test.cjs
 
 # 后端合成数据、计时、配置关联与只读边界
 py -3.12 -B -m unittest discover -s backend/tests
@@ -93,7 +111,19 @@ py -3.12 -B -m unittest discover -s backend/tests
 npm run build
 ```
 
+未安装 Python Launcher 时，后端测试也可用 `& $env:CODEX_TPS_PYTHON -B -m unittest discover -s backend/tests`，需先按上文设置解释器路径。
+
 源码位置：`src/` 为界面与曲线，`desktop/` 为窗口、托盘及通信边界，`backend/` 为采集、配置归属与历史。测试均使用合成来源，不需要你的 Codex 账号或真实会话。
+
+### 构建 Windows EXE
+
+在 Windows x64 上完成 `npm ci` 后运行：
+
+```powershell
+npm run package:win
+```
+
+构建需要联网下载官方 Python 3.13.16 嵌入包，以及 electron-builder 使用的打包工具。脚本先核对固定 SHA-256，再使用 Windows 自带的 `tar.exe` 解压；无需安装系统 Python。生成文件为 `release\Codex-Speed-0.1.1-win-x64.exe`，不会自动上传或发布。完整依赖许可随包保留，Python 来源与校验值见 [第三方声明](THIRD_PARTY_NOTICES.md)。
 
 ## 许可与致谢
 
