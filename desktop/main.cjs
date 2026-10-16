@@ -452,16 +452,16 @@ function startWorker() {
     while ((end = pending.indexOf(10)) !== -1) {
       const line = pending.subarray(0, end);
       pending = pending.subarray(end + 1);
-      if (line.length > MAX_LINE_BYTES) continue;
+      if (line.length > MAX_LINE_BYTES) { publishUnavailable(); continue; }
       try {
         const clean = sanitizeSnapshot(JSON.parse(line.toString('utf8')), mode);
-        if (!clean) continue;
+        if (!clean) { publishUnavailable(); continue; }
         latestSnapshot = clean;
         if (loaded && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('tps:snapshot', clean);
         maybeFinishSmoke();
-      } catch { /* Discard diagnostics and malformed output instead of forwarding it. */ }
+      } catch { publishUnavailable(); /* Report failure without forwarding raw stdout. */ }
     }
-    if (pending.length > MAX_LINE_BYTES) { pending = Buffer.alloc(0); droppingOversizeLine = true; }
+    if (pending.length > MAX_LINE_BYTES) { pending = Buffer.alloc(0); droppingOversizeLine = true; publishUnavailable(); }
   });
   worker.stderr.on('data', () => { /* Drain diagnostic bytes without storing or displaying file paths. */ });
   worker.on('error', () => { publishUnavailable(); finishSmoke(false, 'worker-start'); });

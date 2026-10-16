@@ -29,6 +29,9 @@ Measured TPS is a completed-output estimate: output tokens divided by the
 verified generation interval. Tool execution and pre-generation waiting are
 excluded. Missing/ambiguous boundaries remain excluded samples, not zero TPS.
 Configuration averages are weighted total tokens / total verified seconds.
+Later contradictory timing (`ambiguous_response` or `invalid_duration`) withdraws
+a stored measurement. Same/older-parser replay cannot restore that withdrawal;
+missing evidence alone does not erase a previously verified measurement.
 Model, effort, submitted tier, requested tier and confirmed actual tier form exact groups;
 missing fields remain unknown. Fast/priority and standard/default aliases are
 canonicalized; auto remains distinct. Current source adapters do not establish
@@ -105,17 +108,31 @@ temporary root on normal exit.
 
 Discovery uses the state index's update time to include old sessions continued
 today (up to 512 recent updated sessions). If the index is missing/unreadable,
-only recent dated session folders are probed. Parsing is bounded to 16 MiB and
-32 files per poll, with complete-file catch-up over multiple polls.
+only recent dated session folders are probed. Reaching the discovery cap is
+reported. Historical measurement replay is bounded to 16 MiB and 32 files per
+poll, with complete-file catch-up over multiple polls. Its rotation advances by
+actual visits, including polls whose byte budget ends before 32 files.
 The final tail read is capped to the remaining payload budget, and consumed
 bytes are counted independently of offsets resetting on replacement. Small
 fixed-size rewrite-detection anchor reads remain separate from that payload cap.
+The local `lifecycle.py` module separately uses the adapted normalizer for state,
+never for persistent measurements. It reads up to 256 KiB from each of 32 current
+sources per poll, with a separate fair cursor. Unresolved ownership may expand
+to a 1, 4 or 8 MiB suffix; all expansions share an 8 MiB payload budget per poll
+and another fair cursor. Large appends reposition to the latest bounded suffix;
+unchanged unresolved files stop rescanning at the cap. Explicit own-session or
+own-thread evidence is required; copied ancestors, missing records, changed or
+unreadable sources remain unknown. A header or modification time cannot bless
+an unverified suffix. State-only suffix samples never enter measurement history.
 Timing-log backfill retains up to 40,000 relevant rows. The upstream normalizer retains
 300 recent response boundaries per watched session for late timing repair;
 extremely delayed timing beyond that buffer can remain excluded.
 
 Snapshot schema 3 adds simultaneous conversation rows, including observed tasks
-that have no completed sample yet. Per-task current observed configuration stays
+that have no completed sample yet. Ephemeral `discovered` marks tracked source
+rows so unknown state or missing measurements cannot filter them out. Fixed,
+allowlisted collection issue codes report catch-up and discovery/read limits
+without forwarding arbitrary worker text. Per-task current observed configuration stays
 separate from each historical output's profile; unknown fields are not filled
 from a last output. An active state older than 120 seconds is shown as unknown
 while its observation timestamp remains available; explicit completion or failure

@@ -9,7 +9,7 @@ import {type DropTarget, type ReorderControls} from './ConversationCard';
 import LinkedWorkspace, {type LinkedWorkspaceHandle} from './LinkedWorkspace';
 import { createDemoSnapshot } from './demo';
 import {dismissPendingRunning, receiveMonitorView, type MonitorView} from './monitor-view';
-import { compactSpeed, conversationStateLabels, deriveOverview, deriveScope, effortLabel, isRunning, isValidSample, mergeConversationOrder, moveConversation, orderConversationRows, periodLabels, profileLabel, speedLabel, splitConversationRows, type ConversationRow, type Period } from './statistics';
+import { compactSpeed, conversationStateLabels, countConversationActivity, deriveOverview, deriveScope, effortLabel, isRunning, isValidSample, mergeConversationOrder, moveConversation, orderConversationRows, periodLabels, profileLabel, speedLabel, splitConversationRows, type ConversationRow, type Period } from './statistics';
 import './styles.css';
 import 'lenis/dist/lenis.css';
 
@@ -61,6 +61,7 @@ export default function App() {
   const snapshot = monitorView.snapshot;
   const setSnapshot = (value: Snapshot) => setMonitorView(previous => receiveMonitorView(previous, value));
   const pendingRunning = useMemo(() => new Set(monitorView.pendingRunningIds), [monitorView.pendingRunningIds]);
+  const retainedConversationIds = useMemo(() => new Set([...monitorView.pendingRunningIds, ...monitorView.retainedUnknownIds]), [monitorView.pendingRunningIds, monitorView.retainedUnknownIds]);
   const groupFor = (row: ConversationRow): Group => isRunning(row.state) || pendingRunning.has(row.id) ? 'running' : row.state === 'unknown' ? 'unknown' : 'idle';
   const [desktopState, setDesktopState] = useState<DesktopState>({ pinned: false, expanded: params.get('expanded') !== '0', maximized: false, conversationOrder: [], expandedSize: DEFAULT_EXPANDED_SIZE });
   const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight);
@@ -252,7 +253,7 @@ export default function App() {
     return () => { sequence.kill(); nativeTransition.current = false; };
   }, { scope: panel, dependencies: [expanded, desktopState.maximized, reduced, orderReady], revertOnUpdate: false });
 
-  const observedRows = useMemo(() => deriveOverview(snapshot, period, now, showSubagents, conversation), [snapshot, period, now, showSubagents, conversation]);
+  const observedRows = useMemo(() => deriveOverview(snapshot, period, now, showSubagents, conversation, retainedConversationIds), [snapshot, period, now, showSubagents, conversation, retainedConversationIds]);
   const discoveredIds = useMemo(() => [...new Set([...snapshot.conversations.map((item) => item.id), ...snapshot.samples.map((item) => item.conversationId)])], [snapshot.conversations, snapshot.samples]);
   const effectiveOrder = useMemo(() => mergeConversationOrder(conversationOrder, discoveredIds), [conversationOrder, discoveredIds]);
   const orderKey = effectiveOrder.join(',');
@@ -296,13 +297,15 @@ export default function App() {
       setSelectedProfile(null);
     }
   }, [conversation, rows]);
-  const runningCount = rows.filter((row) => isRunning(row.state)).length;
-  const pendingCount = rows.filter(row => pendingRunning.has(row.id)).length;
+  const {running: runningCount, waitingRecords: pendingCount} = countConversationActivity(rows, pendingRunning);
   const row = rows.find((item) => item.id === conversation);
   const scope = useMemo(() => deriveScope(snapshot, conversation, period, now, selectedProfile), [snapshot, conversation, period, now, selectedProfile]);
   const chartProfile = scope.profile || row?.outputProfile || row?.currentProfile;
   const chartSamples = useMemo(() => snapshot.samples.filter((sample) => sample.conversationId === conversation && sample.profileId === chartProfile?.id), [snapshot.samples, conversation, chartProfile?.id]);
   const isAvailable = monitorView.cached || (snapshot.status !== 'error' && snapshot.status !== 'unavailable');
+  const collectionWarning = Boolean(snapshot.collectionIssues?.length);
+  const collectionSummary = snapshot.collectionIssues?.includes('limited_discovery') ? '会话发现受限，可能未覆盖全部对话'
+    : snapshot.collectionIssues?.some(issue => issue !== 'catching_up') ? '部分记录暂不可用，状态或统计可能不完整' : '正在补读记录，状态与统计尚未补齐';
   const compactLatest = [...rows].filter((item) => item.latest).sort((a, b) => Date.parse(b.latest!.completedAt) - Date.parse(a.latest!.completedAt))[0];
   const noBridge = !bridge && !demo;
   const requestedUnconfirmed = Boolean((scope.profile?.requestedTier || scope.profile?.submittedTier) && !scope.profile.actualTier);
@@ -507,7 +510,7 @@ export default function App() {
   return <ConfigProvider theme={{ algorithm: theme.darkAlgorithm, token: { colorPrimary: '#e3c784', colorText: '#f4f1e9', colorTextSecondary: '#a8b0b1', colorBorder: '#414c4d', colorBgContainer: '#20292a', colorBgElevated: '#263133', fontFamily: 'Noto Sans SC, sans-serif', fontSize: 13, controlHeight: 30, borderRadius: 6 }, components: { Button: { controlHeight: 30, contentFontSize: 13 }, Select: { optionFontSize: 12, optionHeight: 32 }, Tooltip: { colorBgSpotlight: '#f1e4d2', colorTextLightSolid: '#2e251c' } } }}>
     <main data-ui="linked-trends" className={`tps-panel${expanded ? ' is-expanded' : ''}${desktopState.maximized ? ' is-maximized' : ''}${snapshot.mode === 'demo' ? ' is-demo' : ''}`} ref={panel} aria-label="Codex 多对话生成速度" onDragOver={(event) => { if (!internalDrag(event)) { event.preventDefault(); event.dataTransfer.dropEffect = 'none'; } }} onDrop={(event) => { event.preventDefault(); finishDrag(); }}>
       <header className="panel-header">
-        <Tooltip title={monitorView.cached ? snapshot.message : snapshot.mode === 'demo' ? '示例数据，未读取本机 Codex' : isAvailable ? '本机只读统计' : snapshot.message} placement="bottomLeft"><span className={`status-dot status-${snapshot.status}${snapshot.mode === 'demo' ? ' demo-dot' : ''}`} aria-label={snapshot.mode === 'demo' ? '示例模式' : '本机统计状态'} /></Tooltip>
+        <Tooltip title={snapshot.mode === 'demo' ? '示例数据，未读取本机 Codex' : snapshot.message || '本机只读统计'} placement="bottomLeft"><span className={`status-dot status-${snapshot.status}${snapshot.mode === 'demo' ? ' demo-dot' : ''}`} aria-label={snapshot.mode === 'demo' ? '示例模式' : '本机统计状态'} /></Tooltip>
         <span className="panel-brand">Codex Speed</span><span className="header-count">{runningCount} 运行中{pendingCount > 0 && ` · ${pendingCount} 待确认`}</span>
         {snapshot.mode === 'demo' && <span className="demo-label">示例</span>}
         <div className="window-tools no-drag">
@@ -584,7 +587,7 @@ export default function App() {
           <p className="detail-note">TPS 包含推理与工具调用参数，不代表屏幕文字出现速度。<br />缺少可信计时的输出留缺口，不计入均值；不合并并行对话速度。</p>
         </div>}
         </Modal>
-        <footer className="overview-footer"><span className={controlError || orderWarning || monitorView.cached || !isAvailable ? 'footer-status has-error' : 'footer-status'} role={controlError || orderWarning || orderPending || monitorView.cached || !isAvailable || copiedName ? 'status' : undefined} title={orderWarning || (monitorView.cached ? snapshot.message : undefined)}>{controlError || orderWarning || (monitorView.cached || !isAvailable ? snapshot.message || '统计暂时不可用' : orderPending ? '正在保存顺序…' : copiedName ? '完整名称已复制' : groupedView ? '组内顺序固定 · 编号可调序' : snapshot.mode === 'demo' ? '示例数据 · 编号可调序' : '顺序固定 · 编号可调序')}</span><Tooltip title={`TPS 为已完成输出的估算，可能包含推理与工具调用参数，并非实时打字速度。均值只比较同一配置，不合并并行速度。${UNKNOWN_SPEED}`} placement="topLeft"><span className="measurement-hint">完成轮次 TPS <InfoCircleOutlined /></span></Tooltip></footer>
+        <footer className="overview-footer"><span className={controlError || orderWarning || monitorView.cached || collectionWarning || !isAvailable ? 'footer-status has-error' : 'footer-status'} role={controlError || orderWarning || orderPending || monitorView.cached || collectionWarning || !isAvailable || copiedName ? 'status' : undefined} title={orderWarning || (monitorView.cached || collectionWarning ? snapshot.message : undefined)}>{controlError || orderWarning || (monitorView.cached || !isAvailable ? snapshot.message || '统计暂时不可用' : collectionWarning ? collectionSummary : orderPending ? '正在保存顺序…' : copiedName ? '完整名称已复制' : groupedView ? '组内顺序固定 · 编号可调序' : snapshot.mode === 'demo' ? '示例数据 · 编号可调序' : '顺序固定 · 编号可调序')}</span><Tooltip title={`TPS 为已完成输出的估算，可能包含推理与工具调用参数，并非实时打字速度。均值只比较同一配置，不合并并行速度。${UNKNOWN_SPEED}`} placement="topLeft"><span className="measurement-hint">完成轮次 TPS <InfoCircleOutlined /></span></Tooltip></footer>
       </section>
       {controlError && !expanded && <span className="sr-only" role="status">{controlError}</span>}
     </main>

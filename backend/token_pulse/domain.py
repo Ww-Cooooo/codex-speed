@@ -106,7 +106,15 @@ def reconcile(previous: Sample, incoming: Sample) -> Sample:
     revised_boundary = (
         incoming.parser_revision > previous.parser_revision and incoming.issue in withdrawals
     )
-    if previous.issue in withdrawals and previous.parser_revision > incoming.parser_revision:
+    # Contradictory timing is stronger evidence than a previously complete
+    # measurement. Keep that withdrawal through log rotation / replay; missing
+    # evidence alone must neither withdraw a good sample nor restore a bad one.
+    timing_contradictions = {"ambiguous_response", "invalid_duration"}
+    if previous.issue in timing_contradictions and incoming.parser_revision <= previous.parser_revision:
+        base = previous
+    elif incoming.issue in timing_contradictions and incoming.parser_revision >= previous.parser_revision:
+        base = incoming
+    elif previous.issue in withdrawals and previous.parser_revision > incoming.parser_revision:
         base = previous
     else:
         base = (

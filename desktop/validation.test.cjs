@@ -44,6 +44,26 @@ test('worker data is rebuilt with a bounded allowlist before reaching the render
   for (const text of ['synthetic-secret', 'private.json', 'synthetic content', 'synthetic input body', 'untrusted text', 'do not forward']) assert.ok(!json.includes(text));
 });
 
+test('discovery is strict boolean and safe collection codes preserve warnings without forwarding worker text', () => {
+  const input=sampleSnapshot();
+  input.conversations[0].discovered=true;
+  input.collectionIssues=['catching_up','limited_discovery','state_unavailable','logs_unavailable','source_unavailable','records_skipped','catching_up','synthetic-private-path',{},'__proto__'];
+  const output=sanitizeSnapshot(input,'demo');
+  assert.equal(output.conversations[0].discovered,true);assert.equal(output.conversations[1].discovered,false);
+  assert.deepEqual(output.collectionIssues,['catching_up','limited_discovery','state_unavailable','logs_unavailable','source_unavailable','records_skipped']);
+  assert.ok(output.message.includes('状态与统计尚未补齐'));assert.ok(output.message.includes('可能未覆盖全部对话'));
+  assert.ok(output.message.includes('计时记录暂不可用'));
+  for(const text of ['synthetic-private-path','__proto__','do not forward'])assert.ok(!JSON.stringify(output).includes(text));
+  for(const discovered of [null,'true',1,{}]){
+    const invalid=sampleSnapshot();invalid.conversations[0].discovered=discovered;
+    assert.equal(sanitizeSnapshot(invalid,'demo'),null);
+  }
+  for(const collectionIssues of [null,'catching_up',{},Array(33).fill('catching_up')]){
+    assert.equal(sanitizeSnapshot({...sampleSnapshot(),collectionIssues},'demo'),null);
+  }
+  assert.deepEqual(sanitizeSnapshot({...sampleSnapshot(),collectionIssues:['unknown-private-code']},'demo').collectionIssues,[]);
+});
+
 test('invalid worker mode, text, dates, and numeric values are rejected', () => {
   assert.equal(sanitizeSnapshot(sampleSnapshot(), 'live'), null);
   for (const mutate of [

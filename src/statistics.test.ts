@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compactSpeed, deriveOverview, deriveScope, hasUnknownConfiguration, mergeConversationOrder, moveConversation, orderConversationRows, periodBounds, speedLabel, splitConversationRows } from './statistics.ts';
+import { compactSpeed, countConversationActivity, deriveOverview, deriveScope, hasUnknownConfiguration, mergeConversationOrder, moveConversation, orderConversationRows, periodBounds, speedLabel, splitConversationRows } from './statistics.ts';
 import type { ProfileView, SampleView, Snapshot } from './contracts';
 
 const now = new Date(2026, 9, 13, 12, 0).getTime();
@@ -156,6 +156,38 @@ test('overview omits history-only rows outside the period while preserving obser
   assert.equal(deriveOverview(data, 'today', now).length, 1);
   data.conversations[0] = { ...data.conversations[0], state: 'idle', updatedAt: new Date(now).toISOString() };
   assert.equal(deriveOverview(data, 'today', now).length, 1);
+});
+
+test('discovered main conversations remain visible before state catch-up without reviving old history or hidden subagents', () => {
+  const child = 'ef'.repeat(32);
+  const data = snapshot([sample({conversationId:convB,completedAt:new Date(now - 2 * 86_400_000).toISOString()})]);
+  data.conversations = [
+    {id:convA,title:'仍在补读的主对话',state:'unknown',updatedAt:null,profileId:null,isSubagent:false,discovered:true},
+    {id:convB,title:null,state:'unknown',updatedAt:null,profileId:null,isSubagent:null,discovered:false},
+    {id:child,title:'明确子任务',state:'unknown',updatedAt:null,profileId:null,isSubagent:true,discovered:true},
+  ];
+  const rows = deriveOverview(data,'today',now);
+  assert.deepEqual(rows.map(row=>row.id),[convA]);
+  assert.equal(rows[0].state,'unknown');assert.equal(rows[0].latest,undefined);assert.equal(rows[0].average,null);
+  assert.deepEqual(new Set(deriveOverview(data,'today',now,true).map(row=>row.id)),new Set([convA,child]));
+  assert.ok(deriveOverview(data,'7days',now).some(row=>row.id===convB));
+});
+
+test('explicit session-retained IDs survive period filtering without promoting unrelated cold history', () => {
+  const data=snapshot([]);
+  data.conversations=[convA,convB].map(id=>({id,title:null,state:'unknown',updatedAt:null,profileId:null,isSubagent:false,discovered:false}));
+  assert.equal(deriveOverview(data,'today',now).length,0);
+  assert.deepEqual(deriveOverview(data,'today',now,false,null,new Set([convA])).map(row=>row.id),[convA]);
+});
+
+test('activity counts separate uncertainty from confirmed work, including after selecting one row', () => {
+  const data=snapshot([]);
+  data.conversations=['generating','tool','waiting','unknown'].map((state,index)=>({id:String(index),title:null,state:state as 'generating'|'tool'|'waiting'|'unknown',updatedAt:null,profileId:null,isSubagent:false}));
+  const pending=new Set(['3','0']); // A stale placement marker must not double-count live work.
+  assert.deepEqual(countConversationActivity(data.conversations,pending),{running:3,waitingRecords:1});
+  assert.deepEqual(countConversationActivity(data.conversations.filter(row=>row.id!=='0'),pending),{running:2,waitingRecords:1});
+  data.conversations[3].state='generating';
+  assert.deepEqual(countConversationActivity(data.conversations,pending),{running:4,waitingRecords:0});
 });
 
 test('monitor groups retain stable row order through phase and timestamp updates', () => {

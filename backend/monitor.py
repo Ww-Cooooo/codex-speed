@@ -24,6 +24,8 @@ from history import History
 from token_pulse.domain import Context, effort, tier
 
 MAX_DISPLAY_TITLE_BYTES = 1024 * 1024
+COLLECTION_ISSUES = frozenset({"catching_up", "limited_discovery", "state_unavailable",
+                               "logs_unavailable", "source_unavailable", "records_skipped"})
 
 
 def iso(at: float) -> str:
@@ -53,7 +55,7 @@ def snapshot(history: History, observation: Observation, mode: str, now: float) 
         })
         conversations.setdefault(sample.task_id, {
             "id": sample.task_id, "title": None, "state": "unknown",
-            "updatedAt": None, "profileId": None, "isSubagent": None,
+            "updatedAt": None, "profileId": None, "isSubagent": None, "discovered": False,
         })
     for task in observation.tasks[:512]:
         identifier = history.identity(task.id)
@@ -70,6 +72,7 @@ def snapshot(history: History, observation: Observation, mode: str, now: float) 
             "updatedAt": iso(updated) if math.isfinite(updated) and 0 < updated <= now + 300 else None,
             "profileId": current_profile,
             "isSubagent": task.is_subagent if type(task.is_subagent) is bool else None,
+            "discovered": True,
         }
     # Match ephemeral display metadata to existing anonymous identities only.
     # It cannot create conversations, assert running state, or label old models.
@@ -101,16 +104,20 @@ def snapshot(history: History, observation: Observation, mode: str, now: float) 
     else:
         status, message = "waiting", "等待一次完整输出"
     if "limited_discovery" in observation.issues and observation.source_available:
-        message = "本地只读监测中；会话索引不可用，当前只查找近期会话"
+        message = "本地只读监测中；会话发现受限，可能未覆盖全部对话"
     if mode == "demo":
         message = "示例数据 · 未接入 Codex"
+    issues = observation.issues & COLLECTION_ISSUES
+    if observation.pending:
+        issues = issues | {"catching_up"}
     return {"schemaVersion": 3, "mode": mode, "status": status, "message": message,
+            "collectionIssues": sorted(issues),
             "updatedAt": iso(now), "activeProfile": samples[-1]["profileId"] if samples else None,
             "profiles": list(profiles.values()), "samples": samples, "conversations": list(conversations.values())}
 
 
 def error_snapshot(mode: str, now: float) -> dict:
-    return {"schemaVersion": 3, "mode": mode, "status": "error", "message": "本地监测暂不可用，请检查目录设置或重新启动小工具", "updatedAt": iso(now), "activeProfile": None, "profiles": [], "samples": [], "conversations": []}
+    return {"schemaVersion": 3, "mode": mode, "status": "error", "message": "本地监测暂不可用，请检查目录设置或重新启动小工具", "collectionIssues": ["source_unavailable"], "updatedAt": iso(now), "activeProfile": None, "profiles": [], "samples": [], "conversations": []}
 
 
 def main(argv=None) -> int:

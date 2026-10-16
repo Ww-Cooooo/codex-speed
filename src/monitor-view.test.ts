@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type {ConversationState, Snapshot} from './contracts';
 import {dismissPendingRunning, receiveMonitorView, type MonitorView} from './monitor-view.ts';
+import {deriveOverview} from './statistics.ts';
 
 const stamp = (step: number) => new Date(1_800_000_000_000 + step * 2000).toISOString();
 const make = (step: number, states: ConversationState[], status: Snapshot['status'] = 'monitoring'): Snapshot => ({
@@ -86,4 +87,34 @@ test('retained incomplete cards keep referenced configuration without creating s
   assert.equal(next.snapshot.profiles.find(profile => profile.id === 'p')?.model,'known-model');
   assert.deepEqual(next.snapshot.samples,[]);
   assert.equal(next.snapshot.message.includes('正在重试'),false);
+});
+
+test('lost null-time active rows stay visible through pending and manual transfer without claiming current discovery', () => {
+  const old=start();old.snapshot.conversations[0].updatedAt=null;old.snapshot.conversations[0].discovered=true;
+  const missing=receiveMonitorView(old,make(1,[]));
+  assert.equal(missing.snapshot.conversations[0].discovered,false);
+  const retained=(view:MonitorView)=>new Set([...view.pendingRunningIds,...view.retainedUnknownIds]);
+  assert.ok(deriveOverview(missing.snapshot,'today',Date.parse(stamp(1)),false,null,retained(missing)).some(row=>row.id==='0'));
+  const moved=dismissPendingRunning(missing,'0');
+  assert.equal(moved.pendingRunningIds.includes('0'),false);
+  assert.ok(deriveOverview(moved.snapshot,'today',Date.parse(stamp(1)),false,null,retained(moved)).some(row=>row.id==='0'));
+  assert.equal(moved.snapshot.conversations[0].state,'unknown');
+});
+
+test('cached records use current collection issues and recovery clears stale warnings', () => {
+  const old=start();old.snapshot.collectionIssues=['catching_up'];old.snapshot.conversations[0].discovered=true;
+  const failed=receiveMonitorView(old,{...make(1,[],'error'),collectionIssues:['source_unavailable']});
+  assert.deepEqual(failed.snapshot.collectionIssues,['source_unavailable']);
+  assert.ok(failed.snapshot.conversations.every(row=>row.discovered===false));
+  const recovered=receiveMonitorView(failed,{...make(2,['generating']),collectionIssues:[]});
+  assert.deepEqual(recovered.snapshot.collectionIssues,[]);assert.equal(recovered.cached,false);
+});
+
+test('a cached discovered unknown row stays readable without being counted as running', () => {
+  const old:MonitorView={snapshot:make(0,['unknown']),pendingRunningIds:[],retainedUnknownIds:[],cached:false};
+  old.snapshot.conversations[0].updatedAt=null;old.snapshot.conversations[0].discovered=true;
+  const failed=receiveMonitorView(old,make(1,[],'error'));
+  assert.deepEqual(failed.pendingRunningIds,[]);assert.deepEqual(failed.retainedUnknownIds,['0']);
+  const rows=deriveOverview(failed.snapshot,'today',Date.parse(stamp(1)),false,null,new Set(failed.retainedUnknownIds));
+  assert.equal(rows.length,1);assert.equal(rows[0].state,'unknown');assert.equal(rows[0].discovered,false);
 });

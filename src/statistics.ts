@@ -40,6 +40,16 @@ export const conversationStateLabels: Record<ConversationState, string> = {
 };
 export const isRunning = (state: ConversationState) => state === 'generating' || state === 'tool' || state === 'waiting';
 
+/** Confirmed activity and retained uncertain placement are separate counts. */
+export function countConversationActivity(rows: readonly ConversationView[], pending: ReadonlySet<string>) {
+  let running = 0, waitingRecords = 0;
+  for (const row of rows) {
+    if (isRunning(row.state)) running += 1;
+    else if (pending.has(row.id)) waitingRecords += 1;
+  }
+  return {running, waitingRecords};
+}
+
 export function isValidSample(sample: SampleView): boolean {
   return !sample.exclusion && typeof sample.tps === 'number' && Number.isFinite(sample.tps) && sample.tps >= 0
     && Number.isFinite(sample.outputTokens) && sample.outputTokens >= 0 && Number.isFinite(sample.durationSeconds) && sample.durationSeconds > 0;
@@ -137,7 +147,7 @@ export function splitConversationRows(rows: readonly ConversationRow[], order?: 
  * Keep a selected source-backed row visible across period changes; its statistics
  * still obey that period, and explicit subagent hiding still takes precedence.
  */
-export function deriveOverview(snapshot: Snapshot, period: Period, now: number, showSubagents = false, retainedConversationId: string | null = null): ConversationRow[] {
+export function deriveOverview(snapshot: Snapshot, period: Period, now: number, showSubagents = false, retainedConversationId: string | null = null, retainedConversationIds?: ReadonlySet<string>): ConversationRow[] {
   const bounds = periodBounds(period, now);
   const profiles = new Map(snapshot.profiles.map((profile) => [profile.id, profile]));
   const conversations = new Map(snapshot.conversations.map((conversation) => [conversation.id, conversation]));
@@ -167,7 +177,7 @@ export function deriveOverview(snapshot: Snapshot, period: Period, now: number, 
   // visible, and a running conversation does not need a completed sample.
   const visible = [...conversations.values()].filter((conversation) =>
     (showSubagents || conversation.isSubagent !== true)
-    && (conversation.id === retainedConversationId || conversation.updatedAt !== null || isRunning(conversation.state) || periodConversations.has(conversation.id)));
+    && (conversation.discovered === true || retainedConversationIds?.has(conversation.id) || conversation.id === retainedConversationId || conversation.updatedAt !== null || isRunning(conversation.state) || periodConversations.has(conversation.id)));
   const titleCounts = new Map<string, number>();
   for (const conversation of visible) {
     const title = conversation.title?.trim();

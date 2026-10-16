@@ -85,6 +85,7 @@ class Rollout:
         self.damaged = False
         self.damage_reason: str | None = None
         self.inherited = False
+        self.ownership_confirmed = False
         self.inherited_items = False
         self.last_output_total: int | None = None
         self.calls: set[str] = set()
@@ -98,6 +99,8 @@ class Rollout:
         if not self.damaged:
             self.damage_reason = reason
         self.damaged = True
+        if reason in {"record_gap", "invalid_record"}:
+            self.ownership_confirmed = False
 
     def reset(self, *, legacy: bool = True) -> None:
         self.items.clear()
@@ -119,6 +122,7 @@ class Rollout:
         self.turn_seconds = self.wait_seconds = None
         self.notice = None
         self.is_subagent = None
+        self.ownership_confirmed = False
         if legacy:
             self.legacy_items.clear()
             self.legacy_turn = ""
@@ -202,6 +206,11 @@ class Rollout:
             return
         if at < self.updated_at - 0.001:
             self.damage("out_of_order")
+        if ((kind == "event_msg" and event in {"thread_settings_applied", "item_completed"})
+                or kind == "token_usage_record"):
+            owner = value.get("thread_id")
+            if isinstance(owner, str) and owner != self.task_id:
+                self.ownership_confirmed = False
         if kind == "session_meta":
             owner = value.get("id")
             if isinstance(owner, str):
@@ -210,6 +219,7 @@ class Rollout:
                     self.reset(legacy=False)
                     self.context = self.own_context
                 self.inherited = inherited
+                self.ownership_confirmed = not inherited
             if not self.inherited:
                 self.own_context = self.context
                 is_subagent = value.get("is_subagent")
@@ -232,6 +242,7 @@ class Rollout:
                     self.reset(legacy=False)
                     self.inherited = False
                     self.context = self.own_context
+                self.ownership_confirmed = True
             elif event == "task_started":
                 self._turn(str(value.get("turn_id", "")), at)
             elif event in {"task_complete", "turn_aborted", "task_failed"}:

@@ -17,6 +17,7 @@ export interface SampleView {
 }
 export interface PointView { time: string; tps: number | null; exclusion: string | null }
 export type ConversationState = 'generating' | 'tool' | 'waiting' | 'idle' | 'error' | 'unknown';
+export type CollectionIssue = 'catching_up' | 'limited_discovery' | 'state_unavailable' | 'logs_unavailable' | 'source_unavailable' | 'records_skipped';
 export interface ConversationView {
   id: string;
   title: string | null;
@@ -24,6 +25,7 @@ export interface ConversationView {
   updatedAt: string | null;
   profileId: string | null;
   isSubagent: boolean | null;
+  discovered?: boolean;
 }
 export interface Snapshot {
   schemaVersion: 3;
@@ -35,6 +37,7 @@ export interface Snapshot {
   profiles: ProfileView[];
   samples: SampleView[];
   conversations: ConversationView[];
+  collectionIssues?: CollectionIssue[];
 }
 export interface DesktopState { pinned: boolean; expanded: boolean; maximized: boolean; conversationOrder: string[]; expandedSize: { width: number; height: number } }
 export interface DesktopBridge {

@@ -9,7 +9,7 @@ import type {LenisRef} from 'lenis/react';
 import type {PointView, ProfileView, SampleView} from './contracts';
 import type {ReorderControls} from './ConversationCard';
 import {deriveRecentChartRange, RECENT_CHART_WINDOW} from './chart-range';
-import {compactSpeed, conversationStateLabels, isRunning, isValidSample, periodLabels, profileLabel, type ConversationRow, type Period} from './statistics';
+import {compactSpeed, conversationStateLabels, countConversationActivity, isValidSample, periodLabels, profileLabel, type ConversationRow, type Period} from './statistics';
 import {ProductionQualityTrack} from './ProductionPulseChart';
 import {LinkedTrendPlot} from './LinkedTrendPlot';
 import {deriveTrendDomain, type TrendTrace} from './linked-trend';
@@ -98,8 +98,7 @@ const LinkedWorkspace = forwardRef<LinkedWorkspaceHandle, LinkedWorkspaceProps>(
   const focusHistory = conversation ? recent.get(conversation) : undefined;
   const focusPoints: PointView[] = focusHistory?.points ?? [];
   const hasFocusReadings = focusPoints.some(point => point.tps !== null && !point.exclusion);
-  const actualRunning = groups.running.filter(row => isRunning(row.state) && !pendingRunning.has(row.id)).length;
-  const waitingRecords = groups.running.filter(row => pendingRunning.has(row.id)).length;
+  const {running: actualRunning, waitingRecords} = countConversationActivity(groups.running, pendingRunning);
 
   const settle = contextSafe(() => {
     const element = root.current;
@@ -200,6 +199,8 @@ const LinkedWorkspace = forwardRef<LinkedWorkspaceHandle, LinkedWorkspaceProps>(
     idle: groups.idle.filter(row => row.id !== conversation),
     unknown: groups.unknown.filter(row => row.id !== conversation),
   };
+  const otherActivity = countConversationActivity(visibleByGroup.running, pendingRunning);
+  const groupActivity = selectedRow ? otherActivity : {running: actualRunning, waitingRecords};
   const placements = new Map<string, {row: number; column: number | string; visible: boolean}>();
   const tracks: string[] = ['minmax(var(--linked-heading-height),auto)', 'var(--linked-chart-height)', '32px'];
   const headers: {group: LinkedGroup; row: number}[] = [];
@@ -262,7 +263,7 @@ const LinkedWorkspace = forwardRef<LinkedWorkspaceHandle, LinkedWorkspaceProps>(
     </section>
     <div className="linked-index-caption" data-linked-flip data-flip-id="conversation-caption">
       {groupedView ? <Button type="text" className="linked-running-toggle group-toggle" data-group="running" aria-expanded={openGroups.running} onClick={() => toggle('running')}>
-        <RightOutlined rotate={openGroups.running ? 90 : 0}/>{selectedRow ? '继续切换' : '正在运行'} <b>{visibleByGroup.running.length}</b>
+        <RightOutlined rotate={openGroups.running ? 90 : 0}/>{selectedRow ? '其他运行' : '正在运行'} <b>{groupActivity.running}</b>{groupActivity.waitingRecords > 0 && <span> · {groupActivity.waitingRecords}待确认</span>}
       </Button> : <span>固定顺序 <b>{rows.length - (selectedRow ? 1 : 0)}</b></span>}
       <Tooltip title={`最新读数属于最近完成输出配置；均值统计${periodLabels[period]}同配置的有效记录。缺测不补零、不计入均值。`}><span>最近完成 / {periodLabels[period]}均值</span></Tooltip>
     </div>

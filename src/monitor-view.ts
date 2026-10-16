@@ -17,11 +17,15 @@ export function receiveMonitorView(previous: MonitorView, incoming: Snapshot): M
   if ((before.conversations.length > 0 || before.samples.length > 0) && Date.parse(incoming.updatedAt) < Date.parse(before.updatedAt)) return previous;
   const cached = (incoming.status === 'error' || incoming.status === 'unavailable') && (before.conversations.length > 0 || before.samples.length > 0);
   const source = cached ? {...before, status: incoming.status, updatedAt: incoming.updatedAt,
+    collectionIssues: incoming.collectionIssues ?? [],
     message: `${incoming.message || '监测暂时中断'}；已保留上次记录。`,
-    conversations: before.conversations.map(row => isRunning(row.state) ? {...row, state: 'unknown' as const} : row)} : incoming;
+    conversations: before.conversations.map(row => ({...row, discovered: false, state: isRunning(row.state) ? 'unknown' as const : row.state}))} : incoming;
   const known = new Map(before.conversations.map(row => [row.id, row]));
   const pending = new Set(previous.pendingRunningIds);
   const retainedUnknown = new Set(previous.retainedUnknownIds);
+  if (cached) for (const row of before.conversations) {
+    if (row.discovered === true && row.state === 'unknown') retainedUnknown.add(row.id);
+  }
   const conversations: ConversationView[] = source.conversations.map(row => {
     const old = known.get(row.id);
     if (row.state === 'unknown' && (pending.has(row.id) || (old && isRunning(old.state)))) {
@@ -35,7 +39,7 @@ export function receiveMonitorView(previous: MonitorView, incoming: Snapshot): M
   for (const old of before.conversations) {
     if (!present.has(old.id) && (isRunning(old.state) || pending.has(old.id) || retainedUnknown.has(old.id))) {
       if (isRunning(old.state)) pending.add(old.id);
-      conversations.push({...old, state: 'unknown'});
+      conversations.push({...old, state: 'unknown', discovered: false});
     }
   }
   const profiles = [...source.profiles], profileIds = new Set(profiles.map(profile => profile.id));

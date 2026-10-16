@@ -31,6 +31,14 @@ const STATUS_MESSAGES = Object.freeze({
   unavailable: '暂未找到可用的本地记录',
   error: '采集暂不可用，请稍后重新打开',
 });
+const COLLECTION_ISSUE_MESSAGES = Object.freeze({
+  catching_up: '正在补读记录，状态与统计尚未补齐',
+  limited_discovery: '会话发现受限，可能未覆盖全部对话',
+  state_unavailable: '会话索引暂不可用',
+  logs_unavailable: '计时记录暂不可用',
+  source_unavailable: '部分来源暂不可读',
+  records_skipped: '部分记录未能解析，统计可能不完整',
+});
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/ +()-]{0,79}$/;
 const PROFILE_ID = /^[a-f0-9]{16,64}$/;
 const CONVERSATION_ID = /^[a-f0-9]{64}$/;
@@ -83,6 +91,7 @@ function sanitizeSnapshot(value, expectedMode) {
     || !Array.isArray(value.profiles) || value.profiles.length > 10512
     || !Array.isArray(value.samples) || value.samples.length > 10000
     || !Array.isArray(value.conversations) || value.conversations.length > 10512
+    || (value.collectionIssues !== undefined && (!Array.isArray(value.collectionIssues) || value.collectionIssues.length > 32))
     || (value.activeProfile !== null && (typeof value.activeProfile !== 'string' || !PROFILE_ID.test(value.activeProfile)))) return null;
   const profiles = [];
   const ids = new Set();
@@ -111,21 +120,24 @@ function sanitizeSnapshot(value, expectedMode) {
       || (item.title !== null && (typeof item.title !== 'string' || Array.from(item.title).length > 160 || UNSAFE_TITLE.test(item.title)))
       || !STATES.has(item.state) || (item.updatedAt !== null && !timestamp(item.updatedAt))
       || (item.isSubagent !== null && typeof item.isSubagent !== 'boolean')
+      || (item.discovered !== undefined && typeof item.discovered !== 'boolean')
       || (item.profileId !== null && (typeof item.profileId !== 'string' || !ids.has(item.profileId)))) return null;
     conversationIds.add(item.id);
-    conversations.push({ id: item.id, title: item.title, state: item.state, updatedAt: item.updatedAt, profileId: item.profileId, isSubagent: item.isSubagent });
+    conversations.push({ id: item.id, title: item.title, state: item.state, updatedAt: item.updatedAt, profileId: item.profileId, isSubagent: item.isSubagent, discovered: item.discovered === true });
   }
   if (samples.some(sample => !conversationIds.has(sample.conversationId))) return null;
+  const collectionIssues = [...new Set((value.collectionIssues || []).filter(code => typeof code === 'string' && Object.hasOwn(COLLECTION_ISSUE_MESSAGES, code)))];
   return {
     schemaVersion: 3,
     mode: expectedMode,
     status: value.status,
-    message: STATUS_MESSAGES[value.status],
+    message: [STATUS_MESSAGES[value.status], ...collectionIssues.map(code => COLLECTION_ISSUE_MESSAGES[code])].join('；'),
     updatedAt: value.updatedAt,
     activeProfile: value.activeProfile,
     profiles,
     samples,
     conversations,
+    collectionIssues,
   };
 }
 
