@@ -3,8 +3,8 @@ import { Chart } from '@antv/g2';
 import { Renderer } from '@antv/g-svg';
 import { CanvasSpace, Pt } from 'pts';
 import type { PointView } from './contracts';
+import { prepareChartSeries, type PlotPoint } from './chart-series';
 
-type PlotPoint = { time: number; tps: number };
 const PADDING = { top: 16, right: 12, bottom: 34, left: 40 };
 const timeLabel = (value: unknown, includeDate = false, includeSeconds = false) => {
   const date = new Date(Number(value));
@@ -14,26 +14,12 @@ const timeLabel = (value: unknown, includeDate = false, includeSeconds = false) 
 };
 
 function prepare(points: PointView[], range?: [number, number]) {
-  const sorted = points.filter((point) => Number.isFinite(Date.parse(point.time))).map((point) => ({
-    time: Date.parse(point.time),
-    tps: typeof point.tps === 'number' && Number.isFinite(point.tps) && point.tps >= 0 && !point.exclusion ? point.tps : null,
-  })).sort((a, b) => a.time - b.time);
-  const segments: PlotPoint[][] = [];
-  let segment: PlotPoint[] = [];
-  for (const point of sorted) {
-    if (point.tps === null) {
-      if (segment.length) segments.push(segment);
-      segment = [];
-    } else segment.push({ time: point.time, tps: point.tps });
-  }
-  if (segment.length) segments.push(segment);
-  const valid = segments.flat();
-  const gaps = sorted.filter((point) => point.tps === null).map((point) => point.time);
-  const first = sorted[0]?.time ?? Date.now();
-  const last = sorted.at(-1)?.time ?? first;
+  const series = prepareChartSeries(points);
+  const first = series.times[0] ?? Date.now();
+  const last = series.times.at(-1) ?? first;
   // A single real sample still gets readable time coordinates, without inventing samples.
   const domain: [number, number] = range && range[1] > range[0] ? range : first === last ? [first - 30 * 60_000, first + 30 * 60_000] : [first, last];
-  return { segments, valid, gaps, domain };
+  return { ...series, domain };
 }
 
 function GapBand({ gaps, domain, paused }: { gaps: number[]; domain: [number, number]; paused: boolean }) {
@@ -136,6 +122,9 @@ export function TodayChart({ points, average, range, paused, unavailable = false
         .style('stroke', '#958c78').style('lineWidth', 1).style('lineDash', [3, 4]).tooltip(false).animate(false);
       for (const segment of data.segments) if (segment.length > 1) instance.line()
         .data(segment).encode('x', 'time').encode('y', 'tps').style('stroke', '#edbd5b').style('lineWidth', 2).tooltip(false).animate(false);
+      for (const bridge of data.bridges) instance.line()
+        .data(bridge).encode('x', 'time').encode('y', 'tps').style('stroke', '#edbd5b').style('strokeOpacity', 0.65)
+        .style('lineWidth', 1).style('lineDash', [2, 3]).tooltip(false).animate(false);
       instance.point().data(data.valid).encode('x', 'time').encode('y', 'tps').encode('size', pointRadius)
         .style('fill', '#edbd5b').style('stroke', '#24241f').style('lineWidth', data.valid.length > 60 ? 0.7 : 1.3)
         .tooltip({ title: (datum: PlotPoint) => timeLabel(datum.time, true, true), items: [{ channel: 'y', name: '生成速度（估算）', valueFormatter: (value: number) => `${value.toFixed(1)} TPS` }] }).animate(false);
@@ -149,8 +138,8 @@ export function TodayChart({ points, average, range, paused, unavailable = false
     };
   }, [data, average, paused, height, enlarged, width, tickCount, pointRadius, crossesDay, span]);
 
-  const summary = data.valid.length ? `${data.valid.length} 次有效输出，${data.gaps.length} 次无法测量；虚线为按生成秒数加权的平均值。` : '当前范围还没有可测量的输出。';
-  return <div className="plot-wrap" style={{ '--chart-height': `${height}px`, height } as CSSProperties} role="img" aria-label={summary} data-domain-start={data.domain[0]} data-domain-end={data.domain[1]} data-valid-count={data.valid.length} data-gap-count={data.gaps.length} data-segment-count={data.segments.length} data-point-radius={pointRadius} data-tick-count={tickCount} data-chart-height={height}>
+  const summary = data.valid.length ? `${data.valid.length} 次有效输出，${data.gaps.length} 次无法测量；灰色水平虚线为按生成秒数加权的平均值，金色细虚线仅连接缺测两端的真实读数，不补计缺测。` : '当前范围还没有可测量的输出。';
+  return <div className="plot-wrap" style={{ '--chart-height': `${height}px`, height } as CSSProperties} role="img" aria-label={summary} data-domain-start={data.domain[0]} data-domain-end={data.domain[1]} data-valid-count={data.valid.length} data-gap-count={data.gaps.length} data-segment-count={data.segments.length} data-bridge-count={data.bridges.length} data-point-radius={pointRadius} data-tick-count={tickCount} data-chart-height={height}>
     <div ref={host} className="plot-host" />
     <div className="gap-track" style={{ left: plotPadding.left, right: plotPadding.right }}><GapBand gaps={data.gaps} domain={data.domain} paused={paused} /></div>
     {(!data.valid.length || failed) && <div className="plot-empty">

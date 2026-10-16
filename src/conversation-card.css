@@ -45,6 +45,9 @@
 .card-state i { width: 4px; height: 6px; border-radius: 1px; background: #d8aa69; transform: skew(-15deg); }
 .card-state.state-idle i { background: #9b9b91; }
 .card-state.state-unknown i { background: #b49cbd; }
+.card-pending-state.ant-btn { height: 22px; padding: 0; gap: 4px; color: #d4b47c; font-size: 10px; line-height: 16px; }
+.card-pending-state.ant-btn .anticon { font-size: 8px; opacity: .7; }
+.card-pending-state.ant-btn i { background: #d4b47c; }
 .pulse-card .card-focus-button.ant-btn { flex-shrink: 0; width: 23px; min-width: 23px; height: 22px; padding: 0; display: grid; place-items: center; border-radius: 6px; color: #392b20; background: #e7d9c4; font-size: 12px; }
 .pulse-card .card-focus-button.ant-btn:hover { background: #efc26b !important; color: #2d2119 !important; }
 .pulse-card .card-focus-button.ant-btn:active { background: #d2a554 !important; }

@@ -2,13 +2,13 @@ import {useEffect, useMemo, useRef, useState} from 'react';
 import {Chart, type G2Spec, type Mark} from '@antv/g2';
 import {Renderer} from '@antv/g-svg';
 import {Bound, CanvasSpace, Pt} from 'pts';
-import {deriveChartRange, type ChartRangeResult} from './chart-range';
-import type {PointView, SampleView} from './contracts';
+import type {ChartRangeResult} from './chart-range';
+import {prepareChartSeries, type PlotPoint} from './chart-series';
+import type {PointView} from './contracts';
 import './production-pulse-chart.css';
 
-type PlotPoint = {time: number; tps: number};
 type Prepared = {
-  bounds: [number, number]; valid: PlotPoint[]; segments: PlotPoint[][];
+  bounds: [number, number]; valid: PlotPoint[]; segments: PlotPoint[][]; bridges: [PlotPoint, PlotPoint][];
   average: number | null; excluded: number; detail: boolean; height: number;
   unavailable: boolean; error: string | null;
 };
@@ -33,16 +33,8 @@ const rangeCaption = ([start, end]: readonly [number, number]) => {
 const pointsKey = (points: readonly PointView[]) => JSON.stringify(points.map(p => [p.time, p.tps, p.exclusion]));
 
 function prepare(result: ChartRangeResult, detail: boolean, height: number, unavailable: boolean): Prepared {
-  const segments: PlotPoint[][] = [];
-  let segment: PlotPoint[] = [];
-  for (const point of unavailable ? [] : result.points) {
-    if (point.tps === null || point.exclusion) {
-      if (segment.length) segments.push(segment);
-      segment = [];
-    } else segment.push({time: Date.parse(point.time), tps: point.tps});
-  }
-  if (segment.length) segments.push(segment);
-  return {bounds: result.bounds, valid: segments.flat(), segments,
+  const series = prepareChartSeries(unavailable ? [] : result.points);
+  return {bounds: result.bounds, valid: series.valid, segments: series.segments, bridges: series.bridges,
     average: unavailable ? null : result.average, excluded: unavailable ? 0 : result.excludedCount,
     detail, height, unavailable, error: result.error};
 }
@@ -76,6 +68,10 @@ function options(data: Prepared, width: number, height: number): G2Spec {
     type: 'line', key: `valid-run-${index}`, data: segment, encode: {x: 'time', y: 'tps'},
     style: {stroke: tone.line, lineWidth: detail ? 2.2 : 1.8}, tooltip: false, animate: false,
   });
+  for (const [index, bridge] of data.bridges.entries()) children.push({
+    type: 'line', key: `missing-reading-bridge-${index}`, data: bridge, encode: {x: 'time', y: 'tps'},
+    style: {stroke: tone.line, strokeOpacity: 0.65, lineDash: [2, 3], lineWidth: 1}, tooltip: false, animate: false,
+  });
   children.push({type: 'point', key: 'completed-readings', data: data.valid,
     encode: {x: 'time', y: 'tps', size: pointSize},
     style: {fill: tone.line, stroke: tone.paper, lineWidth: detail ? 1.1 : 0.8},
@@ -102,19 +98,16 @@ function options(data: Prepared, width: number, height: number): G2Spec {
   };
 }
 
-/** The caller supplies one conversation's selected output configuration history.
- * The shared range owner alone decides filtering, exclusion and weighted mean.
+/** The caller's shared range owner supplies one conversation/configuration's
+ * filtered output, exclusions and weighted mean for both chart and record count.
  */
-export function ProductionPulseChart({samples, scopeBounds, now, detail = false, height, unavailable = false, paused = false}: {
-  samples: readonly SampleView[]; scopeBounds: readonly [number, number]; now: number;
+export function ProductionPulseChart({result, detail = false, height, unavailable = false, paused = false}: {
+  result: ChartRangeResult;
   detail?: boolean; height: number; unavailable?: boolean; paused?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null), schedule = useRef<(() => void) | null>(null);
   const [failed, setFailed] = useState(false);
-  // Polling may replace arrays without changing a record. Avoid redrawing the
-  // SVG (and dismissing a tooltip) for identical authoritative content.
-  const samplesKey = JSON.stringify(samples.map(s => [s.profileId, s.conversationId, s.tps, s.completedAt, s.outputTokens, s.durationSeconds, s.exclusion]));
-  const result = useMemo(() => deriveChartRange(samples, {mode: 'auto'}, scopeBounds, now), [samplesKey, scopeBounds[0], scopeBounds[1], now]);
+  // Preserve the SVG and tooltip when polling replaces identical records.
   const contentKey = pointsKey(result.points);
   const data = useMemo(() => prepare(result, detail, height, unavailable),
     [contentKey, result.bounds[0], result.bounds[1], result.average, result.excludedCount, result.error, detail, height, unavailable]);
@@ -176,10 +169,10 @@ export function ProductionPulseChart({samples, scopeBounds, now, detail = false,
   }, []);
   useEffect(() => {schedule.current?.();}, [data]);
 
-  const message = unavailable ? '暂时没有可用的统计' : data.error || (failed ? '曲线暂时不可用' : result.points.length ? '这段输出暂无可信计时' : '当前范围暂无输出');
+  const message = unavailable ? '暂时没有可用的统计' : data.error || (failed ? '曲线暂时不可用' : result.points.length ? '这段输出暂无可信计时' : detail ? '当前范围暂无输出' : '近30分钟暂无完成输出');
   return <div className={`production-pulse-chart${detail ? ' is-detail' : ''}`} style={{height}}
-    role="img" aria-label={unavailable ? message : `${data.valid.length}次有效输出，${data.excluded}次缺测；${caption}；${domain[0]}至${domain[1]} TPS，虚线为当前配置的加权均值。`}
-    data-valid-count={data.valid.length} data-gap-count={data.excluded} data-segment-count={data.segments.length}
+    role="img" aria-label={unavailable ? message : `${data.valid.length}次有效输出，${data.excluded}次缺测；${caption}；${domain[0]}至${domain[1]} TPS。灰色水平虚线为范围加权均值，金色细虚线仅连接缺测两端的真实读数，不补计缺测。`}
+    data-valid-count={data.valid.length} data-gap-count={data.excluded} data-segment-count={data.segments.length} data-bridge-count={data.bridges.length}
     data-domain-start={data.bounds[0]} data-domain-end={data.bounds[1]} data-y-max={domain[1]} data-paused={paused}>
     <div ref={host} className="production-pulse-host" style={{visibility: blocked || failed ? 'hidden' : 'visible'}} />
     <span className="production-pulse-unit" aria-hidden="true">{detail || blocked ? 'TPS' : `0–${domain[1]} TPS`}</span>

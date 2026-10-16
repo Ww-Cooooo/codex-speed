@@ -1,8 +1,8 @@
 import {useMemo, type DragEvent, type KeyboardEvent} from 'react';
 import {Button, Dropdown, Tooltip} from 'antd';
-import {CloseOutlined, CopyOutlined, InfoCircleOutlined, LineChartOutlined} from '@ant-design/icons';
+import {CloseOutlined, CopyOutlined, DownOutlined, InfoCircleOutlined, LineChartOutlined} from '@ant-design/icons';
 import type {ProfileView, SampleView} from './contracts';
-import {deriveChartRange} from './chart-range';
+import {deriveChartRange, deriveRecentChartRange} from './chart-range';
 import {compactSpeed, conversationStateLabels, isValidSample, periodLabels, profileLabel, type ConversationRow, type Period} from './statistics';
 import {ProductionPulseChart, ProductionQualityTrack} from './ProductionPulseChart';
 import './conversation-card.css';
@@ -22,6 +22,7 @@ export interface ReorderControls {
 type Props = {
   row: ConversationRow; index: number; period: Period; now: number;
   available: boolean; selected: boolean; quiet?: boolean; paused?: boolean;
+  pending?: boolean; onPendingDismiss?: () => void;
   samples: readonly SampleView[]; scopeBounds: [number, number]; chartProfile?: ProfileView;
   onSelect: () => void; onDetails: () => void; onCopy: () => void;
   reorder: ReorderControls; first: boolean; last: boolean;
@@ -29,7 +30,7 @@ type Props = {
 const speed = (value: number | null | undefined) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value.toFixed(1) : '—';
 const rowState = (row: ConversationRow) => row.state === 'idle' ? '未运行' : row.state === 'unknown' ? '状态待确认' : conversationStateLabels[row.state];
 
-export default function ConversationCard({row, index, period, now, available, selected, quiet = false, paused = false, samples, scopeBounds, chartProfile, onSelect, onDetails, onCopy, reorder, first, last}: Props) {
+export default function ConversationCard({row, index, period, now, available, selected, quiet = false, paused = false, pending = false, onPendingDismiss, samples, scopeBounds, chartProfile, onSelect, onDetails, onCopy, reorder, first, last}: Props) {
   const profile = row.latest ? row.outputProfile : row.currentProfile;
   const tier = compactSpeed(profile);
   const changed = Boolean(row.currentProfile && row.latest && row.currentProfile.id !== row.latest.profileId);
@@ -37,7 +38,7 @@ export default function ConversationCard({row, index, period, now, available, se
   const measured = Boolean(available && row.latest && isValidSample(row.latest));
   const latest = !available ? '—' : !row.latest ? '待测' : speed(measured ? row.latest.tps : null);
   const average = speed(available ? row.average : null);
-  const history = useMemo(() => deriveChartRange(samples, {mode: 'auto'}, scopeBounds, now), [samples, scopeBounds, now]);
+  const history = useMemo(() => selected ? deriveChartRange(samples, {mode: 'auto'}, scopeBounds, now) : deriveRecentChartRange(samples, now), [samples, selected, scopeBounds, now]);
   const placement = reorder.target?.id === row.id ? reorder.target.placement : null;
   const titleMenu = {items: [{key: 'copy', label: '复制完整名称', icon: <CopyOutlined/>}], onClick: onCopy};
 
@@ -54,7 +55,11 @@ export default function ConversationCard({row, index, period, now, available, se
                   onDragStart={event => reorder.onStart(event, row.id)} onDragEnd={reorder.onEnd} onKeyDown={event => reorder.onKey(event, row.id)}>{String(index + 1).padStart(2, '0')}</Button>
               </Tooltip>
             </Dropdown>
-            <span className={`card-state state-${row.state}`}><i aria-hidden="true"/>{rowState(row)}</span>
+            {pending ? <Dropdown trigger={['click']} menu={{items:[{key:'transfer',label:'移至待确认区'}],onClick:onPendingDismiss}}>
+              <Tooltip title="暂时未收到新记录，卡片原位保留。确认完成或取消后会自动归组；点击可手动移至待确认区。">
+                <Button type="text" className="card-state card-pending-state" aria-label={`${row.label} 等待记录，点击管理`}><i aria-hidden="true"/>等待记录<DownOutlined aria-hidden="true"/></Button>
+              </Tooltip>
+            </Dropdown> : <span className={`card-state state-${row.state}`}><i aria-hidden="true"/>{rowState(row)}</span>}
           </div>
           <Tooltip title={selected ? '收起曲线，保留当前位置' : '查看完成记录与测量依据'}>
             <Button type="text" className="card-focus-button" icon={selected ? <CloseOutlined/> : <LineChartOutlined/>} aria-label={`${selected ? '收起' : '查看'} ${row.label} 的历史曲线`} aria-expanded={selected} onClick={onSelect}/>
@@ -64,7 +69,7 @@ export default function ConversationCard({row, index, period, now, available, se
           <Button type="text" className="conversation-row card-title-button" aria-label={`查看 ${row.label} 的输出详情`} aria-current={selected ? 'true' : undefined} aria-expanded={selected} onClick={onSelect}><span>{row.label}</span></Button>
         </Tooltip></Dropdown></h3>
         <div className="card-config">
-          <Tooltip title={`${row.latest ? '最近完成输出的配置' : '当前观察，尚无完成记录'}：${profile?.model || '模型未知'}`}><span className="card-model">{profile?.model || '模型未知'}</span></Tooltip>
+          <Tooltip title={`${row.latest ? '最近完成输出的配置' : pending ? '上次观察配置，等待新记录' : '当前观察，尚无完成记录'}：${profile?.model || '模型未知'}`}><span className="card-model">{profile?.model || '模型未知'}</span></Tooltip>
           <Tooltip title={changed ? `配置已变；当前 ${row.currentProfile ? profileLabel(row.currentProfile) : '未知'}。本卡读数仍属于最近完成输出的配置。` : `推理强度：${profile?.effort || '未知'}`}><span className={`card-effort${changed ? ' has-change' : ''}`}>{profile?.effort || '未知'}{changed && <InfoCircleOutlined aria-label="配置已变"/>}</span></Tooltip>
           <Tooltip title={tier.title}><span className="card-tier" data-tier-evidence={tier.source} tabIndex={0} aria-label={tier.title}>{tier.label}</span></Tooltip>
         </div>
@@ -76,10 +81,10 @@ export default function ConversationCard({row, index, period, now, available, se
         <div className="card-mean"><Tooltip title={`最近输出同配置 · ${periodLabels[period]}加权均值，${row.validCount} 次有效${row.excludedCount ? `，${row.excludedCount} 次缺测不计入均值` : ''}`}><span className="card-reading-label">同配置均值</span></Tooltip><strong title={`${average} TPS`} className={average.length > 6 ? `reading-fit-${Math.min(10, average.length)}` : undefined}>{average}</strong></div>
       </div>
       {(!quiet || selected) && <div className="card-history">
-        <div className="card-history-heading"><Tooltip title={`曲线仅显示 ${chartProfile ? profileLabel(chartProfile) : '所选输出配置'} 的${periodLabels[period]}记录，按输出时段自动聚焦。`}><span className={otherHistoryProfile ? 'history-other-profile' : undefined}>{otherHistoryProfile ? '所选配置历史' : selected ? '完成记录' : '完成轨迹'}</span></Tooltip>
-          {selected ? <Button type="text" size="small" className="card-evidence-button" onClick={onDetails} aria-label={`查看 ${row.label} 的完整记录与配置`}>记录与配置</Button> : <Tooltip title={`${history.validCount} 次有效，${history.excludedCount} 次缺测；缺测断线，不按零计算。`}><span className="card-record-count">{history.validCount} 次{history.excludedCount > 0 && <b> · 缺测 {history.excludedCount}</b>}</span></Tooltip>}
+        <div className="card-history-heading"><Tooltip title={`曲线仅显示 ${chartProfile ? profileLabel(chartProfile) : '所选输出配置'} 的${selected ? periodLabels[period] : '近30分钟'}记录，按实际输出时段自动聚焦。${selected ? '' : `上方同配置均值仍统计${periodLabels[period]}。`}灰色水平虚线是曲线范围均值；金色细虚线仅连接缺测两端，不补数据。`}><span className={otherHistoryProfile ? 'history-other-profile' : undefined}>{otherHistoryProfile ? '所选配置历史' : selected ? '完成记录' : '近30分钟'}</span></Tooltip>
+          {selected ? <Button type="text" size="small" className="card-evidence-button" onClick={onDetails} aria-label={`查看 ${row.label} 的完整记录与配置`}>记录与配置</Button> : <Tooltip title={`近30分钟 ${history.validCount} 次有效，${history.excludedCount} 次缺测。金色细虚线仅连接缺测两端的真实读数；缺测不按零计算，也不计入均值。`}><span className="card-record-count">{history.validCount} 次{history.excludedCount > 0 && <b> · 缺测 {history.excludedCount}</b>}</span></Tooltip>}
         </div>
-        <ProductionPulseChart samples={samples} scopeBounds={scopeBounds} now={now} detail={selected} height={selected ? 90 : 66} unavailable={!available} paused={paused}/>
+        <ProductionPulseChart result={history} detail={selected} height={selected ? 90 : 66} unavailable={!available} paused={paused}/>
         {selected && <div className="card-quality"><ProductionQualityTrack points={available ? history.points : []} bounds={history.bounds}/></div>}
       </div>}
     </article>

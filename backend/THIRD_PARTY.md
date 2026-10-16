@@ -117,8 +117,13 @@ extremely delayed timing beyond that buffer can remain excluded.
 Snapshot schema 3 adds simultaneous conversation rows, including observed tasks
 that have no completed sample yet. Per-task current observed configuration stays
 separate from each historical output's profile; unknown fields are not filled
-from a last output. A state older than 120 seconds is shown as unknown while its
-observation timestamp remains available. This metadata describes local task
+from a last output. An active state older than 120 seconds is shown as unknown
+while its observation timestamp remains available; explicit completion or failure
+does not expire. Freshness is evaluated after collection, with at most 2 seconds
+of local clock tolerance. The renderer keeps previously observed active cards in
+place with an explicit pending marker, without counting them as confirmed active.
+This placement is session-only and does not turn cold unknown history into active work.
+This metadata describes local task
 records, not the foreground OS window or a verified parent/subagent relationship.
 Retained-history-only rows have no persisted title or current state.
 

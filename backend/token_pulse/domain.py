@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 PARSER_REVISION = 5
 EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"})
 TIERS = frozenset({"auto", "default", "standard", "fast", "priority", "ultrafast", "flex", "scale"})
+STATE_CLOCK_SKEW_SECONDS = 2
 
 
 def effort(value: object) -> str | None:
@@ -153,9 +154,15 @@ class Task:
     is_subagent: bool | None = None
 
     def has_recent_state(self, now: float, max_age: float = 120) -> bool:
-        return math.isfinite(self.updated_at) and 0 <= now - self.updated_at <= max_age
+        # Local writers can be slightly ahead of the monitor's clock. This is
+        # bounded clock tolerance, not permission to treat future history as live.
+        return math.isfinite(self.updated_at) and -STATE_CLOCK_SKEW_SECONDS <= now - self.updated_at <= max_age
 
     def display_state(self, now: float) -> str:
+        # Completion/failure is a lifecycle fact; silence cannot undo it. Active
+        # phases still expire because an old event cannot prove ongoing work.
+        if self.state in {"idle", "error"} and math.isfinite(self.updated_at) and 0 < self.updated_at <= now + STATE_CLOCK_SKEW_SECONDS:
+            return self.state
         if self.state != "unknown" and not self.has_recent_state(now):
             return "stale"
         return self.state

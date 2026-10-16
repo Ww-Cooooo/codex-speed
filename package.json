@@ -1,6 +1,6 @@
 {
   "name": "codex-speed",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Local read-only Codex output speed monitor",
   "type": "module",

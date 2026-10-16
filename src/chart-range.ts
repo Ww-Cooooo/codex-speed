@@ -20,6 +20,7 @@ export interface ChartRangeResult {
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
+export const RECENT_CHART_WINDOW = 30 * MINUTE;
 const validTime = (time: number) => Number.isFinite(time) && Number.isFinite(new Date(time).getTime());
 
 function localDate(year: number, month: number, day: number, hour = 0, minute = 0, second = 0, millisecond = 0): Date | null {
@@ -134,4 +135,23 @@ export function deriveChartRange(
     result.bounds = [result.bounds[0] - MINUTE, result.bounds[1] + MINUTE];
   }
   return result;
+}
+
+/** Compact cards show recent output, independently of the period used by their
+ * summary mean. Fit only real recent records; never pull older output forward.
+ */
+export function deriveRecentChartRange(samples: readonly SampleView[], now: number): ChartRangeResult {
+  const windowStart = now - RECENT_CHART_WINDOW;
+  const result = deriveChartRange(samples, { mode: 'auto' }, [windowStart, now], now);
+  result.label = '近 30 分钟';
+  if (result.error || !result.points.length) return result;
+  let start = Math.max(windowStart, result.bounds[0]);
+  let end = Math.min(now, result.bounds[1]);
+  const minimumSpan = 2 * MINUTE;
+  if (end - start < minimumSpan) {
+    start = Math.max(windowStart, (start + end) / 2 - minimumSpan / 2);
+    end = Math.min(now, start + minimumSpan);
+    start = Math.max(windowStart, end - minimumSpan);
+  }
+  return { ...result, bounds: [start, end] };
 }

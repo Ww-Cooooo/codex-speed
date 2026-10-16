@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveChartRange } from './chart-range.ts';
+import { deriveChartRange, deriveRecentChartRange, RECENT_CHART_WINDOW } from './chart-range.ts';
 import type { SampleView } from './contracts';
 
 const minute = 60_000;
@@ -118,4 +118,45 @@ test('local calendar days follow DST rather than fixed 24-hour blocks, and missi
     if (previous === undefined) delete process.env.TZ;
     else process.env.TZ = previous;
   }
+});
+
+test('compact recent range filters only the last thirty minutes and fits their real output', () => {
+  const first = now - 20 * minute, last = now - 10 * minute;
+  const result = deriveRecentChartRange([sample(now - RECENT_CHART_WINDOW - 1), sample(first),
+    sample(last, { tps: null, exclusion: 'missing_start' }), sample(now + 1)], now);
+  assert.deepEqual(result.bounds, [first - minute, last + minute]);
+  assert.equal(result.points.length, 2);
+  assert.equal(result.validCount, 1);
+  assert.equal(result.excludedCount, 1);
+  assert.equal(result.average, 10);
+});
+
+test('compact recent range never refills from stale history or fabricates an empty reading', () => {
+  const result = deriveRecentChartRange([sample(now - RECENT_CHART_WINDOW - 1)], now);
+  assert.deepEqual(result.bounds, [now - RECENT_CHART_WINDOW, now]);
+  assert.deepEqual(result.points, []);
+  assert.equal(result.average, null);
+});
+
+test('compact ranges stay inside thirty minutes and retain a readable two-minute axis at either edge', () => {
+  for (const time of [now - RECENT_CHART_WINDOW, now - minute, now]) {
+    const result = deriveRecentChartRange([sample(time)], now);
+    assert.equal(result.bounds[1] - result.bounds[0], 2 * minute);
+    assert.ok(result.bounds[0] >= now - RECENT_CHART_WINDOW);
+    assert.ok(result.bounds[1] <= now);
+    assert.equal(result.points.length, 1);
+  }
+  const full = deriveRecentChartRange([sample(now - RECENT_CHART_WINDOW), sample(now)], now);
+  assert.deepEqual(full.bounds, [now - RECENT_CHART_WINDOW, now]);
+});
+
+test('compact recent ranges cross midnight and retain missing-only records without a mean', () => {
+  const midnight = new Date(2026, 9, 14).getTime();
+  const result = deriveRecentChartRange([sample(midnight - minute, { tps: null }),
+    sample(midnight + minute, { exclusion: 'cancelled' })], midnight + 2 * minute);
+  assert.equal(result.points.length, 2);
+  assert.equal(result.validCount, 0);
+  assert.equal(result.excludedCount, 2);
+  assert.equal(result.average, null);
+  assert.ok(deriveRecentChartRange([], NaN).error);
 });

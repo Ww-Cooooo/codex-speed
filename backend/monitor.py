@@ -57,9 +57,10 @@ def snapshot(history: History, observation: Observation, mode: str, now: float) 
         })
     for task in observation.tasks[:512]:
         identifier = history.identity(task.id)
-        # A historical event cannot assert that a task is still running now.
-        # Its latest observed timestamp remains visible; stale state is unknown.
-        state = task.state if task.has_recent_state(now) and task.state in {
+        # Active events expire; confirmed completion/failure does not. Stale
+        # active state remains unknown rather than being mistaken for stopped.
+        observed_state = task.display_state(now)
+        state = observed_state if observed_state in {
             "generating", "tool", "waiting", "idle", "error", "unknown"
         } else "unknown"
         updated = task.updated_at
@@ -152,6 +153,9 @@ def main(argv=None) -> int:
                 now = time.time()
                 try:
                     observation = collector.poll(now)
+                    # Events may be appended during collection. Judge freshness
+                    # after the read, never against a time preceding those events.
+                    now = time.time()
                     history.accept(observation.samples, now)
                     output = snapshot(history, observation, args.mode, now)
                 except (OSError, sqlite3.Error, ValueError, TypeError, OverflowError):

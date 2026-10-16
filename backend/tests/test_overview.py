@@ -1,21 +1,24 @@
 """Synthetic tests for ephemeral names and simultaneous conversation metadata."""
 from __future__ import annotations
 
+import io
 import json
+import os
 import sqlite3
 import sys
 import tempfile
 import unittest
-from contextlib import closing
+from contextlib import closing, redirect_stdout
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from collector import Collector, Observation, safe_title, today_start
-from demo import build_source
+from demo import build_source, iso
 from history import History
-from monitor import snapshot
+from monitor import main, snapshot
 from token_pulse.domain import Context, Sample, Task
 from token_pulse.projection import project
 from token_pulse.rollout import Rollout
@@ -74,6 +77,130 @@ class OverviewTests(unittest.TestCase):
             self.assertEqual(row["title"], "正在检查")
             self.assertEqual(row["id"], store.identity("running"))
             self.assertIn(row["profileId"], {profile["id"] for profile in result["profiles"]})
+
+    def test_poll_projects_state_at_collection_end_not_before_its_events(self):
+        # A writer emits this event while the collector is working. Using the
+        # poll-start clock would classify it as a future, unknown task.
+        task = Task("during-poll", None, "generating", BASE + 3)
+        observation = Observation([], [], True, False, set(), [task])
+        store = Mock()
+        store.recent.return_value = []
+        store.identity.side_effect = lambda identifier: identifier
+        collector = Mock()
+        collector.poll.return_value = observation
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as root:
+            with (patch("monitor.History", return_value=store),
+                  patch("monitor.Collector", return_value=collector),
+                  patch("monitor.time.time", side_effect=[BASE, BASE + 5]),
+                  redirect_stdout(output)):
+                code = main(["--mode", "live", "--codex-home", str(Path(root) / "source"),
+                             "--data-dir", str(Path(root) / "data"), "--once"])
+        self.assertEqual(code, 0)
+        collector.poll.assert_called_once_with(BASE)
+        store.accept.assert_called_once_with([], BASE + 5)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["conversations"][0]["state"], "generating")
+        self.assertEqual(result["updatedAt"], "2026-10-13T12:00:05.000+00:00")
+
+    def test_small_clock_skew_is_bounded_and_active_silence_still_expires(self):
+        with tempfile.TemporaryDirectory() as root, closing(History(Path(root))) as store:
+            tasks = [Task(identifier, None, state, updated) for identifier, state, updated in (
+                ("during-read", "generating", BASE + .05),
+                ("clock-limit", "tool", BASE + 2),
+                ("future", "waiting", BASE + 2.01),
+                ("silent", "tool", BASE - 121),
+            )]
+            result = snapshot(store, Observation([], [], True, False, set(), tasks), "live", BASE)
+            states = {row["id"]: row["state"] for row in result["conversations"]}
+            self.assertEqual(states, {store.identity(identifier): state for identifier, state in (
+                ("during-read", "generating"), ("clock-limit", "tool"),
+                ("future", "unknown"), ("silent", "unknown"),
+            )})
+
+    def test_explicit_terminal_events_survive_silence_but_not_invalid_clocks(self):
+        tasks = []
+        for event, expected in (("task_complete", "idle"), ("task_failed", "error"), ("turn_aborted", "error")):
+            parser = Rollout(event)
+            for second, payload in ((-130, {"type": "task_started", "turn_id": "turn"}),
+                                    (-121, {"type": event})):
+                parser.feed(project({"timestamp": iso(BASE + second),
+                                     "type": "event_msg", "payload": payload}))
+            task = parser.task(LogEvidence())
+            self.assertEqual(task.state, expected)
+            tasks.append(task)
+        tasks.extend([Task("future-terminal", None, "idle", BASE + 3),
+                      Task("invalid-terminal", None, "error", float("nan"))])
+        with tempfile.TemporaryDirectory() as root, closing(History(Path(root))) as store:
+            result = snapshot(store, Observation([], [], True, False, set(), tasks), "live", BASE)
+            states = {row["id"]: row["state"] for row in result["conversations"]}
+            for identifier, expected in (("task_complete", "idle"), ("task_failed", "error"),
+                                         ("turn_aborted", "error"), ("future-terminal", "unknown"),
+                                         ("invalid-terminal", "unknown")):
+                self.assertEqual(states[store.identity(identifier)], expected)
+
+    def test_degraded_discovery_keeps_safe_parser_offsets_and_recovers_cleanup(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "source"
+            # These indexed sessions deliberately live in an old date directory,
+            # outside fallback discovery, as real continued sessions can do.
+            build_source(source, BASE)
+            collector = Collector(source)
+            try:
+                collector.poll(BASE)
+                before = dict(collector.watched)
+                offsets = {identifier: tail.offset for identifier, (tail, _) in before.items()}
+                outside = Path(root) / "outside.jsonl"
+                outside.touch()
+                collector.watched["outside"] = JsonlTail(outside), Rollout("outside")
+                with patch("collector.read_only", side_effect=sqlite3.OperationalError("synthetic copy race")):
+                    collector.discover(BASE + 10)
+                self.assertIn("state_unavailable", collector.discovery_issues)
+                self.assertNotIn("outside", collector.watched)
+                self.assertEqual(set(collector.watched), set(before))
+                for identifier, pair in before.items():
+                    self.assertIs(collector.watched[identifier], pair)
+                    self.assertEqual(pair[0].offset, offsets[identifier])
+                continued = collector.poll(BASE + 11)
+                self.assertEqual(len(continued.tasks), 8)
+                for identifier, (tail, _) in collector.watched.items():
+                    self.assertEqual(tail.offset, offsets[identifier])
+                removed = next(iter(before))
+                with closing(sqlite3.connect(source / "state_5.sqlite")) as connection:
+                    connection.execute("DELETE FROM threads WHERE id=?", (removed,))
+                    connection.commit()
+                collector.discover(BASE + 20)
+                self.assertNotIn("state_unavailable", collector.discovery_issues)
+                self.assertNotIn(removed, collector.watched)
+                self.assertEqual(set(collector.watched), set(before) - {removed})
+                for identifier, pair in collector.watched.items():
+                    self.assertIs(pair, before[identifier])
+            finally:
+                collector.close()
+
+    def test_degraded_discovery_retains_the_existing_source_count_bound(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "source"
+            sessions = source / "sessions"
+            sessions.mkdir(parents=True)
+            known = source / "known.jsonl"
+            known.touch()
+            identifier = "00000000-0000-4000-8000-000000000001"
+            candidate = sessions / f"rollout-{identifier}.jsonl"
+            candidate.touch()
+            os.utime(candidate, (BASE, BASE))
+            collector = Collector(source)
+            try:
+                collector.watched = {f"known-{index}": (JsonlTail(known), Rollout(f"known-{index}"))
+                                     for index in range(512)}
+                before = dict(collector.watched)
+                collector.discover(BASE)
+                self.assertIn("limited_discovery", collector.discovery_issues)
+                self.assertEqual(set(collector.watched), set(before))
+                for task, pair in before.items():
+                    self.assertIs(collector.watched[task], pair)
+            finally:
+                collector.close()
 
     def test_current_profile_does_not_backfill_or_relabel_output(self):
         with tempfile.TemporaryDirectory() as root, closing(History(Path(root))) as store:

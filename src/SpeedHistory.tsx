@@ -94,7 +94,7 @@ export function SpeedHistory({ samples, scopeBounds, now, paused, unavailable, e
       <span>范围均值 <strong data-chart-average>{unavailable || result.average === null ? '—' : result.average.toFixed(1)}</strong><small> TPS</small></span>
     </div>
     <TodayChart points={unavailable ? [] : result.points} average={unavailable ? null : result.average} range={result.bounds} paused={paused || (!large && expandedView)} unavailable={unavailable} height={large ? expandedHeight : 190} enlarged={large} />
-    <p className="chart-history-footnote">{selection.mode === 'auto' ? '自动聚焦所选统计范围内的输出时段。' : '按本机时间显示所选时段。'}虚线为加权均值，缺测处断开。</p>
+    <p className="chart-history-footnote">{selection.mode === 'auto' ? '自动聚焦所选统计范围内的输出时段。' : '按本机时间显示所选时段。'}灰色水平虚线为加权均值；金色细虚线连接缺测两端的真实读数，不补数据。</p>
   </section>;
 
   return <>

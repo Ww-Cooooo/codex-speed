@@ -7,6 +7,7 @@ import { ReactLenis, type LenisRef } from 'lenis/react';
 import type { DesktopState, ProfileView, SampleView, Snapshot } from './contracts';
 import ConversationCard, {type DropTarget, type ReorderControls} from './ConversationCard';
 import { createDemoSnapshot } from './demo';
+import {dismissPendingRunning, receiveMonitorView, type MonitorView} from './monitor-view';
 import { compactSpeed, conversationStateLabels, deriveOverview, deriveScope, effortLabel, isRunning, isValidSample, mergeConversationOrder, moveConversation, orderConversationRows, periodLabels, profileLabel, speedLabel, splitConversationRows, type ConversationRow, type Period } from './statistics';
 import './styles.css';
 import 'lenis/dist/lenis.css';
@@ -32,7 +33,6 @@ type Group = 'running' | 'idle' | 'unknown';
 const groupNames: Record<Group, string> = { running: '正在运行', idle: '未运行', unknown: '状态待确认' };
 const stateLabel = (row: ConversationRow) => row.state === 'idle' ? '未运行' : row.state === 'unknown' ? '状态待确认' : conversationStateLabels[row.state];
 const compactModel = (model?: string | null) => model ? model.replace(/^gpt[- ]/i, '').replace(/-/g, ' ') : '未知';
-const groupFor = (row: ConversationRow): Group => isRunning(row.state) ? 'running' : row.state === 'unknown' ? 'unknown' : 'idle';
 function useReducedMotion() {
   const [reduced, setReduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   useEffect(() => {
@@ -57,7 +57,11 @@ export default function App() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const demo = params.get('demo') === '1';
   const bridge = window.tps;
-  const [snapshot, setSnapshot] = useState<Snapshot>(() => demo && !bridge ? createDemoSnapshot(params.get('fixture') || '') : fallbackSnapshot('waiting', '正在连接本机统计'));
+  const [monitorView, setMonitorView] = useState<MonitorView>(() => ({snapshot: demo && !bridge ? createDemoSnapshot(params.get('fixture') || '') : fallbackSnapshot('waiting', '正在连接本机统计'), pendingRunningIds: [], retainedUnknownIds: [], cached: false}));
+  const snapshot = monitorView.snapshot;
+  const setSnapshot = (value: Snapshot) => setMonitorView(previous => receiveMonitorView(previous, value));
+  const pendingRunning = useMemo(() => new Set(monitorView.pendingRunningIds), [monitorView.pendingRunningIds]);
+  const groupFor = (row: ConversationRow): Group => isRunning(row.state) || pendingRunning.has(row.id) ? 'running' : row.state === 'unknown' ? 'unknown' : 'idle';
   const [desktopState, setDesktopState] = useState<DesktopState>({ pinned: false, expanded: params.get('expanded') !== '0', maximized: false, conversationOrder: [], expandedSize: DEFAULT_EXPANDED_SIZE });
   const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight);
   const [selectedProfile, setSelectedProfile] = useState<string | null>(null);
@@ -175,7 +179,7 @@ export default function App() {
       }
       captureReadingLayout();
       setNow(Date.now());
-      setSnapshot((previous) => Date.parse(value.updatedAt) >= Date.parse(previous.updatedAt) || previous.samples.length === 0 ? value : previous);
+      setSnapshot(value);
     };
     const unsubscribe = bridge.onSnapshot(receive);
     const unsubscribeState = bridge.onState((state) => {
@@ -286,7 +290,11 @@ export default function App() {
   const orderKey = effectiveOrder.join(',');
   latestOrder.current = effectiveOrder;
   const rows = useMemo(() => orderConversationRows(observedRows, effectiveOrder), [observedRows, effectiveOrder]);
-  const groups = useMemo(() => splitConversationRows(rows, effectiveOrder), [rows, effectiveOrder]);
+  const groups = useMemo(() => {
+    const result = splitConversationRows(rows, effectiveOrder);
+    return {...result, running: rows.filter(row => isRunning(row.state) || pendingRunning.has(row.id)),
+      unknown: result.unknown.filter(row => !pendingRunning.has(row.id))};
+  }, [rows, effectiveOrder, pendingRunning]);
   // Only composition changes animate. Polling numbers or generating/tool state
   // changes must not restart motion or interpret Lenis scrolling as a reorder.
   const groupingStructure = `${orderReady ? 'ready' : 'loading'};` + (groupedView ? (['running', 'idle', 'unknown'] as Group[])
@@ -327,11 +335,12 @@ export default function App() {
     }
   }, [conversation, rows]);
   const runningCount = rows.filter((row) => isRunning(row.state)).length;
+  const pendingCount = rows.filter(row => pendingRunning.has(row.id)).length;
   const row = rows.find((item) => item.id === conversation);
   const scope = useMemo(() => deriveScope(snapshot, conversation, period, now, selectedProfile), [snapshot, conversation, period, now, selectedProfile]);
   const chartProfile = scope.profile || row?.outputProfile || row?.currentProfile;
   const chartSamples = useMemo(() => snapshot.samples.filter((sample) => sample.conversationId === conversation && sample.profileId === chartProfile?.id), [snapshot.samples, conversation, chartProfile?.id]);
-  const isAvailable = snapshot.status !== 'error' && snapshot.status !== 'unavailable';
+  const isAvailable = monitorView.cached || (snapshot.status !== 'error' && snapshot.status !== 'unavailable');
   const compactLatest = [...rows].filter((item) => item.latest).sort((a, b) => Date.parse(b.latest!.completedAt) - Date.parse(a.latest!.completedAt))[0];
   const noBridge = !bridge && !demo;
   const requestedUnconfirmed = Boolean((scope.profile?.requestedTier || scope.profile?.submittedTier) && !scope.profile.actualTier);
@@ -584,6 +593,7 @@ export default function App() {
       const outputProfile = selected ? chartProfile : item.outputProfile || item.currentProfile;
       const samples = historyByConversation.get(`${item.id}:${outputProfile?.id}`) || [];
       return <ConversationCard key={item.id} row={item} index={index} period={period} now={now} available={isAvailable} selected={selected} quiet={quiet} paused={!expanded}
+        pending={pendingRunning.has(item.id)} onPendingDismiss={() => setMonitorView(previous => dismissPendingRunning(previous, item.id))}
         samples={samples} scopeBounds={scope.bounds} chartProfile={outputProfile}
         onSelect={() => openConversation(item.id)} onDetails={() => setDetailsOpen(true)} onCopy={() => {void copyName(item.label);}}
         reorder={reorder} first={index === 0} last={index === list.length - 1}/>;
@@ -596,8 +606,8 @@ export default function App() {
   return <ConfigProvider theme={{ algorithm: theme.darkAlgorithm, token: { colorPrimary: '#e5b448', colorText: '#f1e9df', colorTextSecondary: '#c0aa95', colorBorder: '#5a493b', colorBgContainer: '#302823', colorBgElevated: '#342b24', fontFamily: 'Noto Sans SC, sans-serif', fontSize: 13, controlHeight: 30, borderRadius: 6 }, components: { Button: { controlHeight: 30, contentFontSize: 13 }, Select: { optionFontSize: 12, optionHeight: 32 }, Tooltip: { colorBgSpotlight: '#f1e4d2', colorTextLightSolid: '#2e251c' } } }}>
     <main data-ui="parallel-compact" data-columns={columns} className={`tps-panel${expanded ? ' is-expanded' : ''}${desktopState.maximized ? ' is-maximized' : ''}${snapshot.mode === 'demo' ? ' is-demo' : ''}`} ref={panel} aria-label="Codex 多对话生成速度" onDragOver={(event) => { if (!internalDrag(event)) { event.preventDefault(); event.dataTransfer.dropEffect = 'none'; } }} onDrop={(event) => { event.preventDefault(); finishDrag(); }}>
       <header className="panel-header">
-        <Tooltip title={snapshot.mode === 'demo' ? '示例数据，未读取本机 Codex' : isAvailable ? '本机只读统计' : snapshot.message} placement="bottomLeft"><span className={`status-dot status-${snapshot.status}${snapshot.mode === 'demo' ? ' demo-dot' : ''}`} aria-label={snapshot.mode === 'demo' ? '示例模式' : '本机统计状态'} /></Tooltip>
-        <span className="panel-brand">Codex Speed</span><span className="header-count">{runningCount} 运行中</span>
+        <Tooltip title={monitorView.cached ? snapshot.message : snapshot.mode === 'demo' ? '示例数据，未读取本机 Codex' : isAvailable ? '本机只读统计' : snapshot.message} placement="bottomLeft"><span className={`status-dot status-${snapshot.status}${snapshot.mode === 'demo' ? ' demo-dot' : ''}`} aria-label={snapshot.mode === 'demo' ? '示例模式' : '本机统计状态'} /></Tooltip>
+        <span className="panel-brand">Codex Speed</span><span className="header-count">{runningCount} 运行中{pendingCount > 0 && ` · ${pendingCount} 待确认`}</span>
         {snapshot.mode === 'demo' && <span className="demo-label">示例</span>}
         <div className="window-tools no-drag">
           <Tooltip title={desktopState.pinned ? '取消置顶' : '置顶窗口'} placement="bottom"><Button type="text" className={desktopState.pinned ? 'tool-button pinned' : 'tool-button'} icon={desktopState.pinned ? <PushpinFilled /> : <PushpinOutlined />} aria-label={desktopState.pinned ? '取消置顶' : '置顶窗口'} aria-pressed={desktopState.pinned} loading={pinPending} disabled={noBridge} onClick={togglePinned} /></Tooltip>
@@ -616,7 +626,7 @@ export default function App() {
         <span className="compact-caption">{rows.length} 个对话 · 展开后同时查看</span>
       </section>
       <section id="conversation-workspace" ref={workspace} className="workspace" aria-hidden={!expanded} inert={!expanded}>
-        <div className="monitor-heading"><div><h1>输出速度</h1><span>查看各对话的速度和运行状态。</span></div><div className="monitor-active"><i/><b>{runningCount}</b><span>正在运行</span></div></div>
+        <div className="monitor-heading"><div><h1>输出速度</h1><span>查看各对话的速度和运行状态。</span></div><div className="monitor-active"><i/><b>{runningCount}</b><span>{pendingCount ? `运行 · ${pendingCount} 待确认` : '正在运行'}</span></div></div>
         <div className="overview-toolbar no-drag">
           <div className="overview-heading"><span>{rows.length} 个对话</span><span className="overview-view-label">{groupedView ? '按状态分组' : '固定顺序'}</span></div>
           <Tooltip title="均值按本机日期筛选；运行中的对话始终保留。" placement="bottomRight"><Select<Period> value={period} aria-label="统计时段" size="small" className="period-select" options={(Object.keys(periodLabels) as Period[]).map((value) => ({ value, label: periodLabels[value] }))} onChange={(value) => { captureReadingLayout(); setPeriod(value); setSelectedProfile(null); }} open={periodOpen} onOpenChange={setPeriodOpen} popupMatchSelectWidth={110} getPopupContainer={() => document.body} /></Tooltip>
@@ -635,8 +645,8 @@ export default function App() {
         }} onDrop={(event) => { const target = dragTarget.current; if (target) dropDrag(event, target.id); else { event.preventDefault(); finishDrag(); } }} tabIndex={0} aria-label="全部对话列表，可上下滚动">
           {!orderReady ? <div className="overview-empty" role="status"><strong>正在读取列表顺序…</strong><span>读回保存的顺序后再显示。</span></div> : !groupedView ? rows.length ? renderCards(rows) : <div className="overview-empty" role="status"><strong>{!isAvailable ? '统计暂时不可用' : snapshot.status === 'waiting' ? '正在等待本机对话' : '暂未发现对话'}</strong><span>{snapshot.message || '发现运行记录后会自动显示在这里。'}</span></div> : (['running', 'idle', 'unknown'] as Group[]).map((group) => <section className={`conversation-group group-${group}`} data-group={group} key={group}>
             <Button type="text" className="group-toggle" onClick={() => toggleGroup(group)} aria-label={`${openGroups[group] ? '折叠' : '展开'}${groupNames[group]}对话`} aria-expanded={openGroups[group]} aria-controls={`group-${group}-body`}>
-              <span className="group-label"><RightOutlined className={openGroups[group] ? 'group-arrow is-open' : 'group-arrow'} /><span>{groupNames[group]}</span><b>{groups[group].length}</b></span>
-              <span className={`group-summary${group === 'idle' && groups.idle.some((item) => item.state === 'error') ? ' has-error' : ''}`}>{group === 'idle' ? `${groups.idle.filter((item) => item.state === 'error').length} 条异常` : group === 'unknown' ? '不判断为已停止' : '生成 · 工具 · 等待'}</span>
+              <span className="group-label"><RightOutlined className={openGroups[group] ? 'group-arrow is-open' : 'group-arrow'} /><span>{groupNames[group]}</span><b>{group === 'running' ? runningCount : groups[group].length}</b>{group === 'running' && pendingCount > 0 && <span className="group-pending">+ {pendingCount} 待确认</span>}</span>
+              <span className={`group-summary${group === 'idle' && groups.idle.some((item) => item.state === 'error') ? ' has-error' : ''}`}>{group === 'idle' ? `${groups.idle.filter((item) => item.state === 'error').length} 条异常` : group === 'unknown' ? '不判断为已停止' : pendingCount ? '等待记录 · 原位保留' : '生成 · 工具 · 等待'}</span>
             </Button>
             <div className="group-body" id={`group-${group}-body`} data-group-body={group} data-open={openGroups[group]} aria-hidden={!openGroups[group]} inert={!openGroups[group]} style={{ height: openGroups[group] ? 'auto' : 0 }}>
               {groups[group].length ? renderCards(groups[group], group !== 'running') : group === 'running' && !rows.length ? <div className="overview-empty" role="status"><strong>{!isAvailable ? '统计暂时不可用' : snapshot.status === 'waiting' ? '正在等待本机对话' : '暂未发现对话'}</strong><span>{snapshot.message || '发现运行记录后会自动显示在这里。'}</span></div> : <div className="group-empty">{group === 'running' ? '暂无正在运行的对话' : group === 'idle' ? '暂无未运行的对话' : '没有需要确认的状态'}</div>}
@@ -664,7 +674,7 @@ export default function App() {
           <p className="detail-note">TPS 包含推理与工具调用参数，不代表屏幕文字出现速度。<br />缺少可信计时的输出留缺口，不计入均值；不合并并行对话速度。</p>
         </div>}
         </Modal>
-        <footer className="overview-footer"><span className={controlError || orderWarning || !isAvailable ? 'footer-status has-error' : 'footer-status'} role={controlError || orderWarning || orderPending || !isAvailable || copiedName ? 'status' : undefined} title={orderWarning || undefined}>{controlError || orderWarning || (!isAvailable ? snapshot.message || '统计暂时不可用' : orderPending ? '正在保存顺序…' : copiedName ? '完整名称已复制' : groupedView ? '组内顺序固定 · 编号可调序' : snapshot.mode === 'demo' ? '示例数据 · 编号可调序' : '顺序固定 · 编号可调序')}</span><Tooltip title={`TPS 为已完成输出的估算，可能包含推理与工具调用参数，并非实时打字速度。均值只比较同一配置，不合并并行速度。${UNKNOWN_SPEED}`} placement="topLeft"><span className="measurement-hint">完成轮次 TPS <InfoCircleOutlined /></span></Tooltip></footer>
+        <footer className="overview-footer"><span className={controlError || orderWarning || monitorView.cached || !isAvailable ? 'footer-status has-error' : 'footer-status'} role={controlError || orderWarning || orderPending || monitorView.cached || !isAvailable || copiedName ? 'status' : undefined} title={orderWarning || (monitorView.cached ? snapshot.message : undefined)}>{controlError || orderWarning || (monitorView.cached || !isAvailable ? snapshot.message || '统计暂时不可用' : orderPending ? '正在保存顺序…' : copiedName ? '完整名称已复制' : groupedView ? '组内顺序固定 · 编号可调序' : snapshot.mode === 'demo' ? '示例数据 · 编号可调序' : '顺序固定 · 编号可调序')}</span><Tooltip title={`TPS 为已完成输出的估算，可能包含推理与工具调用参数，并非实时打字速度。均值只比较同一配置，不合并并行速度。${UNKNOWN_SPEED}`} placement="topLeft"><span className="measurement-hint">完成轮次 TPS <InfoCircleOutlined /></span></Tooltip></footer>
       </section>
       {controlError && !expanded && <span className="sr-only" role="status">{controlError}</span>}
     </main>

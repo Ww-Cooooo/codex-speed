@@ -187,6 +187,7 @@ class Collector:
         found: dict[str, tuple[Path, Context]] = {}
         indexed = self._name_index()
         metadata: dict[str, DisplayMetadata] = {}
+        index_available = False
         state = self._database("state")
         if state:
             try:
@@ -222,6 +223,7 @@ class Collector:
                         checked = self._inside(Path(raw_path), ".jsonl")
                         if checked:
                             found[task] = (checked, Context())
+                    index_available = True
             except (OSError, sqlite3.Error, ValueError, TypeError):
                 self.discovery_issues.add("state_unavailable")
         if not found:
@@ -242,7 +244,12 @@ class Collector:
                         candidates.append((checked.stat().st_mtime, match[1], checked))
             for _, task, path in sorted(candidates, reverse=True)[:512]:
                 found[task] = path, Context()
-        self.watched = {key: pair for key, pair in self.watched.items() if key in found}
+        # A degraded index/fallback is not evidence that a known source vanished.
+        # Keep its parser and offset, while rechecking the source boundary. A
+        # successful index still retires entries outside the current candidate set.
+        self.watched = {key: pair for key, pair in self.watched.items()
+                        if key in found or (not index_available
+                        and self._inside(pair[0].path, ".jsonl") == pair[0].path)}
         for task, item in indexed.items():
             if task not in metadata and len(metadata) < MAX_DISPLAY_METADATA:
                 metadata[task] = item
@@ -250,6 +257,11 @@ class Collector:
         self.titles = {task: item.title for task, item in metadata.items()}
         for task, (path, context) in found.items():
             if task not in self.watched or self.watched[task][0].path != path:
+                # Retaining known sources during degradation must not remove the
+                # original discovery bound. Existing parsers keep their place.
+                if task not in self.watched and len(self.watched) >= 512:
+                    self.discovery_issues.add("limited_discovery")
+                    continue
                 # Replay from the beginning for correct cumulative usage baselines.
                 # Memory/read budget stays bounded; catch-up continues over polls.
                 self.watched[task] = JsonlTail(path, backfill=None), Rollout(task, context=context)
