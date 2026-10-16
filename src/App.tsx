@@ -1,11 +1,12 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
 import { Button, ConfigProvider, Dropdown, Modal, Select, Tooltip, theme } from 'antd';
-import { BorderOutlined, CloseOutlined, CopyOutlined, DownOutlined, EllipsisOutlined, HolderOutlined, InfoCircleOutlined, LineChartOutlined, MinusOutlined, PushpinFilled, PushpinOutlined, RightOutlined, UpOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, BorderOutlined, CloseOutlined, CopyOutlined, DownOutlined, EllipsisOutlined, HolderOutlined, InfoCircleOutlined, LineChartOutlined, MinusOutlined, PushpinFilled, PushpinOutlined, UpOutlined } from '@ant-design/icons';
 import { gsap } from 'gsap';
 import { useGSAP } from '@gsap/react';
 import { ReactLenis, type LenisRef } from 'lenis/react';
 import type { DesktopState, ProfileView, SampleView, Snapshot } from './contracts';
-import ConversationCard, {type DropTarget, type ReorderControls} from './ConversationCard';
+import {type DropTarget, type ReorderControls} from './ConversationCard';
+import LinkedWorkspace, {type LinkedWorkspaceHandle} from './LinkedWorkspace';
 import { createDemoSnapshot } from './demo';
 import {dismissPendingRunning, receiveMonitorView, type MonitorView} from './monitor-view';
 import { compactSpeed, conversationStateLabels, deriveOverview, deriveScope, effortLabel, isRunning, isValidSample, mergeConversationOrder, moveConversation, orderConversationRows, periodLabels, profileLabel, speedLabel, splitConversationRows, type ConversationRow, type Period } from './statistics';
@@ -30,7 +31,6 @@ const UNKNOWN_SPEED = '本地记录未提供可识别档位，不代表未开启
 const ORDER_MIME = 'application/x-codex-tps-conversation';
 const ORDER_LIMIT = 10_512;
 type Group = 'running' | 'idle' | 'unknown';
-const groupNames: Record<Group, string> = { running: '正在运行', idle: '未运行', unknown: '状态待确认' };
 const stateLabel = (row: ConversationRow) => row.state === 'idle' ? '未运行' : row.state === 'unknown' ? '状态待确认' : conversationStateLabels[row.state];
 const compactModel = (model?: string | null) => model ? model.replace(/^gpt[- ]/i, '').replace(/-/g, ' ') : '未知';
 function useReducedMotion() {
@@ -78,7 +78,6 @@ export default function App() {
   const [chartOpen, setChartOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [copiedName, setCopiedName] = useState(false);
-  const [columns, setColumns] = useState(() => window.innerWidth >= 590 ? 3 : 2);
   const [openGroups, setOpenGroups] = useState<Record<Group, boolean>>({ running: true, idle: false, unknown: false });
   const [groupedView, setGroupedView] = useState(true);
   const [conversationOrder, setConversationOrder] = useState<string[]>([]);
@@ -92,8 +91,7 @@ export default function App() {
   const workspace = useRef<HTMLElement>(null);
   const detailScroll = useRef<HTMLDivElement>(null);
   const overviewScroll = useRef<LenisRef>(null);
-  const overviewPosition = useRef(0);
-  const readingLayout = useRef<{ rows: Map<string, { top: number; left: number }>; heights: Map<Group, number> } | null>(null);
+  const linkedWorkspace = useRef<LinkedWorkspaceHandle>(null);
   const focusedConversation = useRef<string | null>(null);
   const focusedHandle = useRef(false);
   const initializedOrder = useRef(!bridge);
@@ -103,7 +101,6 @@ export default function App() {
   const dragSession = useRef<string | null>(null);
   const dragTarget = useRef<DropTarget | null>(null);
   const suppressOpenUntil = useRef(0);
-  const groupingMotion = useRef<gsap.core.Timeline | null>(null);
   const restoreSelectionFocus = useRef<string | null>(null);
   const timeline = useRef<gsap.core.Timeline | null>(null);
   const currentHeight = useRef(window.innerHeight);
@@ -114,7 +111,6 @@ export default function App() {
   const overlayOpen = useRef(false);
   const expandRequest = useRef(0);
   const interactionRevision = useRef(0);
-  const previousSelection = useRef<string | null>(null);
   const reduced = useReducedMotion();
   const expanded = desktopState.expanded;
   expandedSize.current = desktopState.expandedSize;
@@ -122,21 +118,9 @@ export default function App() {
 
   function captureReadingLayout() {
     if (!panel.current) return;
-    const positions = new Map<string, { top: number; left: number }>();
-    const scrollTop = overviewScroll.current?.wrapper?.scrollTop || 0;
-    panel.current.querySelectorAll<HTMLElement>('.conversation-item').forEach((element) => {
-      const body = element.closest<HTMLElement>('[data-group-body]');
-      const rect = element.getBoundingClientRect();
-      if (!body || body.dataset.open === 'true') positions.set(element.dataset.conversationId!, { top: rect.top + scrollTop, left: rect.left });
-    });
-    const heights = new Map<Group, number>();
-    panel.current.querySelectorAll<HTMLElement>('[data-group-body]').forEach((element) => heights.set(element.dataset.groupBody as Group, element.getBoundingClientRect().height));
-    readingLayout.current = { rows: positions, heights };
     const focused = document.activeElement?.closest<HTMLElement>('[data-conversation-id]');
     focusedConversation.current = focused?.dataset.conversationId || null;
     focusedHandle.current = Boolean(document.activeElement?.closest('.conversation-drag-handle'));
-    const scroll = overviewScroll.current?.wrapper;
-    if (scroll) overviewPosition.current = scroll.scrollTop;
   }
 
   useEffect(() => {
@@ -157,13 +141,6 @@ export default function App() {
     return () => window.removeEventListener('resize', resize);
   }, []);
 
-  useEffect(() => {
-    const element = panel.current;
-    if (!element) return;
-    const observer = new ResizeObserver(() => setColumns(element.clientWidth >= 590 ? 3 : 2));
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
 
   useEffect(() => {
     if (!bridge) {
@@ -218,15 +195,6 @@ export default function App() {
 
   useEffect(() => { if (!expanded) { setProfileOpen(false); setPeriodOpen(false); setChartOpen(false); setDetailsOpen(false); } }, [expanded]);
   useEffect(() => { setChartOpen(false); setDetailsOpen(false); setCopiedName(false); }, [conversation]);
-  useEffect(() => {
-    if (conversation || !expanded) return;
-    const frame = requestAnimationFrame(() => {
-      const scroll = overviewScroll.current;
-      if (scroll?.lenis) scroll.lenis.scrollTo(overviewPosition.current, { immediate: true });
-      else if (scroll?.wrapper) scroll.wrapper.scrollTop = overviewPosition.current;
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [conversation, expanded]);
   useEffect(() => {
     const wasOpen = overlayOpen.current;
     overlayOpen.current = menuOpen || profileOpen || periodOpen;
@@ -295,12 +263,6 @@ export default function App() {
     return {...result, running: rows.filter(row => isRunning(row.state) || pendingRunning.has(row.id)),
       unknown: result.unknown.filter(row => !pendingRunning.has(row.id))};
   }, [rows, effectiveOrder, pendingRunning]);
-  // Only composition changes animate. Polling numbers or generating/tool state
-  // changes must not restart motion or interpret Lenis scrolling as a reorder.
-  const groupingStructure = `${orderReady ? 'ready' : 'loading'};` + (groupedView ? (['running', 'idle', 'unknown'] as Group[])
-    .map((group) => `${group}:${openGroups[group] ? 1 : 0}:${groups[group].map((item) => item.id).join(',')}`)
-    .join('|') : `fixed:${rows.map((item) => item.id).join(',')}`) + `;selected:${conversation || ''}`;
-
   useEffect(() => {
     if (orderReady) setConversationOrder((previous) => previous.join(',') === orderKey ? previous : effectiveOrder);
   }, [orderKey, orderReady]);
@@ -355,63 +317,6 @@ export default function App() {
     return histories;
   }, [snapshot.samples]);
 
-  useGSAP(() => {
-    groupingMotion.current?.kill();
-    if (!panel.current || !expanded) return;
-    const before = readingLayout.current;
-    const selectionChanged = previousSelection.current !== conversation;
-    previousSelection.current = conversation;
-    const settle = () => {
-      const scroll = overviewScroll.current;
-      scroll?.lenis?.resize();
-      if (!conversation || !scroll?.wrapper) return;
-      const active = panel.current?.querySelector<HTMLElement>(`[data-conversation-id="${CSS.escape(conversation)}"]`);
-      const body = active?.closest<HTMLElement>('[data-group-body]');
-      if (!active || body?.dataset.open === 'false') return;
-      const clip = scroll.wrapper.getBoundingClientRect(), bounds = active.getBoundingClientRect();
-      let target = scroll.wrapper.scrollTop;
-      if (bounds.top < clip.top + 4) target += bounds.top - clip.top - 4;
-      else if (bounds.bottom > clip.bottom - 4) target += bounds.bottom - clip.bottom + 4;
-      else return;
-      if (scroll.lenis) scroll.lenis.scrollTo(Math.max(0, target), {immediate: true});
-      else scroll.wrapper.scrollTop = Math.max(0, target);
-    };
-    const sequence = gsap.timeline({onComplete: settle});
-    groupingMotion.current = sequence;
-    const histories = panel.current.querySelectorAll('.card-history');
-    gsap.set(histories, {autoAlpha: selectionChanged && !reduced ? 0 : 1});
-    panel.current.querySelectorAll<HTMLElement>('.conversation-card-slot').forEach(slot => {
-      const selected = slot.dataset.conversationId === conversation;
-      const grow = selected ? columns === 3 ? 1.5 : 1.25 : 1;
-      const card = slot.querySelector('.pulse-card');
-      if (reduced) { gsap.set(slot, {flexGrow: grow}); gsap.set(card, {'--digit-size': selected ? '40px' : '54px'}); }
-      else {
-        sequence.to(slot, {flexGrow: grow, duration: .48, ease: 'power3.inOut'}, 0);
-        sequence.to(card, {'--digit-size': selected ? '40px' : '54px', duration: .48, ease: 'power3.inOut'}, 0);
-      }
-    });
-    panel.current.querySelectorAll<HTMLElement>('[data-group-body]').forEach(body => {
-      const group = body.dataset.groupBody as Group;
-      const target = openGroups[group] ? body.firstElementChild?.getBoundingClientRect().height || 0 : 0;
-      const previous = before?.heights.get(group);
-      if (reduced || previous === undefined || Math.abs(previous - target) < 1) gsap.set(body, {height: openGroups[group] ? 'auto' : 0});
-      else sequence.fromTo(body, {height: previous}, {height: target, duration: .3, ease: 'power2.inOut', onComplete: () => {if (openGroups[group]) gsap.set(body, {height: 'auto'});}}, 0);
-    });
-    panel.current.querySelectorAll<HTMLElement>('.conversation-item').forEach(element => {
-      const prior = before?.rows.get(element.dataset.conversationId!);
-      const body = element.closest<HTMLElement>('[data-group-body]');
-      gsap.set(element, {x: 0, y: 0});
-      if (!prior || body?.dataset.open === 'false' || reduced) return;
-      const rect = element.getBoundingClientRect(), scrollTop = overviewScroll.current?.wrapper?.scrollTop || 0;
-      const x = prior.left - rect.left, y = prior.top - (rect.top + scrollTop);
-      if (Math.abs(x) > 1 || Math.abs(y) > 1) sequence.fromTo(element, {x, y}, {x: 0, y: 0, duration: .35, ease: 'power2.out'}, 0);
-    });
-    if (selectionChanged && !reduced) sequence.to(histories, {autoAlpha: 1, duration: .18}, .6);
-    readingLayout.current = null;
-    if (reduced) settle();
-    return () => {sequence.kill();};
-  }, {scope: panel, dependencies: [groupingStructure, expanded, reduced, columns], revertOnUpdate: false});
-
   useLayoutEffect(() => {
     if (detailScroll.current) detailScroll.current.scrollTop = 0;
   }, [conversation, selectedProfile, period]);
@@ -427,7 +332,7 @@ export default function App() {
     const group = groupFor(target);
     const button = !groupedView || openGroups[group]
       ? panel.current.querySelector<HTMLElement>(`[data-conversation-id="${CSS.escape(id)}"] ${focusedHandle.current ? '.conversation-drag-handle' : '.conversation-row'}`)
-      : panel.current.querySelector<HTMLElement>(`[data-group="${group}"] .group-toggle`);
+      : panel.current.querySelector<HTMLElement>(`.linked-state-toggle[data-group="${group}"],.group-toggle[data-group="${group}"]`);
     button?.focus({ preventScroll: true });
   }, [rows, openGroups, conversation, groupedView]);
 
@@ -449,6 +354,18 @@ export default function App() {
   const toggleGroup = (group: Group) => {
     captureReadingLayout();
     setOpenGroups((previous) => ({ ...previous, [group]: !previous[group] }));
+    if (openGroups[group] && group !== 'running') requestAnimationFrame(() => {
+      panel.current?.querySelector<HTMLElement>(`.linked-state-toggle[data-group="${group}"]`)?.focus({preventScroll: true});
+    });
+  };
+  const navigateGroup = (group: 'idle' | 'unknown') => {
+    toggleGroup(group);
+    requestAnimationFrame(() => {
+      const scroll = overviewScroll.current;
+      scroll?.lenis?.resize();
+      const heading = panel.current?.querySelector<HTMLElement>(`.linked-workspace .group-toggle[data-group="${group}"]`);
+      if (!openGroups[group] && heading) scroll?.lenis?.scrollTo(heading, {immediate: reduced, duration: .5});
+    });
   };
 
   const canReorder = orderReady && !orderPending;
@@ -492,7 +409,7 @@ export default function App() {
   const internalDrag = (event: DragEvent<HTMLElement>) => Boolean(dragSession.current && event.dataTransfer.types.includes(ORDER_MIME));
   const dragPlacement = (event: DragEvent<HTMLElement>): DropTarget['placement'] => {
     const bounds = event.currentTarget.getBoundingClientRect();
-    return event.currentTarget.classList.contains('conversation-card-slot')
+    return event.currentTarget.classList.contains('linked-record')
       ? event.clientX < bounds.left + bounds.width / 2 ? 'before' : 'after'
       : event.clientY < bounds.top + bounds.height / 2 ? 'before' : 'after';
   };
@@ -587,24 +504,8 @@ export default function App() {
     try { await navigator.clipboard.writeText(name); setCopiedName(true); }
     catch { setControlError('名称暂未复制，请从完整记录中选择名称复制'); }
   };
-  const renderCards = (list: ConversationRow[], quiet = false) => {
-    const makeCard = (item: ConversationRow, index: number) => {
-      const selected = item.id === conversation;
-      const outputProfile = selected ? chartProfile : item.outputProfile || item.currentProfile;
-      const samples = historyByConversation.get(`${item.id}:${outputProfile?.id}`) || [];
-      return <ConversationCard key={item.id} row={item} index={index} period={period} now={now} available={isAvailable} selected={selected} quiet={quiet} paused={!expanded}
-        pending={pendingRunning.has(item.id)} onPendingDismiss={() => setMonitorView(previous => dismissPendingRunning(previous, item.id))}
-        samples={samples} scopeBounds={scope.bounds} chartProfile={outputProfile}
-        onSelect={() => openConversation(item.id)} onDetails={() => setDetailsOpen(true)} onCopy={() => {void copyName(item.label);}}
-        reorder={reorder} first={index === 0} last={index === list.length - 1}/>;
-    };
-    if (quiet) return <div className="quiet-conversation-list">{list.map(makeCard)}</div>;
-    const chunks = Array.from({length: Math.ceil(list.length / columns)}, (_, index) => list.slice(index * columns, (index + 1) * columns));
-    return <div className="pulse-rows">{chunks.map((chunk, index) => <div className="pulse-row" key={index}>{chunk.map((item, position) => makeCard(item, index * columns + position))}</div>)}</div>;
-  };
-
-  return <ConfigProvider theme={{ algorithm: theme.darkAlgorithm, token: { colorPrimary: '#e5b448', colorText: '#f1e9df', colorTextSecondary: '#c0aa95', colorBorder: '#5a493b', colorBgContainer: '#302823', colorBgElevated: '#342b24', fontFamily: 'Noto Sans SC, sans-serif', fontSize: 13, controlHeight: 30, borderRadius: 6 }, components: { Button: { controlHeight: 30, contentFontSize: 13 }, Select: { optionFontSize: 12, optionHeight: 32 }, Tooltip: { colorBgSpotlight: '#f1e4d2', colorTextLightSolid: '#2e251c' } } }}>
-    <main data-ui="parallel-compact" data-columns={columns} className={`tps-panel${expanded ? ' is-expanded' : ''}${desktopState.maximized ? ' is-maximized' : ''}${snapshot.mode === 'demo' ? ' is-demo' : ''}`} ref={panel} aria-label="Codex 多对话生成速度" onDragOver={(event) => { if (!internalDrag(event)) { event.preventDefault(); event.dataTransfer.dropEffect = 'none'; } }} onDrop={(event) => { event.preventDefault(); finishDrag(); }}>
+  return <ConfigProvider theme={{ algorithm: theme.darkAlgorithm, token: { colorPrimary: '#e3c784', colorText: '#f4f1e9', colorTextSecondary: '#a8b0b1', colorBorder: '#414c4d', colorBgContainer: '#20292a', colorBgElevated: '#263133', fontFamily: 'Noto Sans SC, sans-serif', fontSize: 13, controlHeight: 30, borderRadius: 6 }, components: { Button: { controlHeight: 30, contentFontSize: 13 }, Select: { optionFontSize: 12, optionHeight: 32 }, Tooltip: { colorBgSpotlight: '#f1e4d2', colorTextLightSolid: '#2e251c' } } }}>
+    <main data-ui="linked-trends" className={`tps-panel${expanded ? ' is-expanded' : ''}${desktopState.maximized ? ' is-maximized' : ''}${snapshot.mode === 'demo' ? ' is-demo' : ''}`} ref={panel} aria-label="Codex 多对话生成速度" onDragOver={(event) => { if (!internalDrag(event)) { event.preventDefault(); event.dataTransfer.dropEffect = 'none'; } }} onDrop={(event) => { event.preventDefault(); finishDrag(); }}>
       <header className="panel-header">
         <Tooltip title={monitorView.cached ? snapshot.message : snapshot.mode === 'demo' ? '示例数据，未读取本机 Codex' : isAvailable ? '本机只读统计' : snapshot.message} placement="bottomLeft"><span className={`status-dot status-${snapshot.status}${snapshot.mode === 'demo' ? ' demo-dot' : ''}`} aria-label={snapshot.mode === 'demo' ? '示例模式' : '本机统计状态'} /></Tooltip>
         <span className="panel-brand">Codex Speed</span><span className="header-count">{runningCount} 运行中{pendingCount > 0 && ` · ${pendingCount} 待确认`}</span>
@@ -626,13 +527,12 @@ export default function App() {
         <span className="compact-caption">{rows.length} 个对话 · 展开后同时查看</span>
       </section>
       <section id="conversation-workspace" ref={workspace} className="workspace" aria-hidden={!expanded} inert={!expanded}>
-        <div className="monitor-heading"><div><h1>输出速度</h1><span>查看各对话的速度和运行状态。</span></div><div className="monitor-active"><i/><b>{runningCount}</b><span>{pendingCount ? `运行 · ${pendingCount} 待确认` : '正在运行'}</span></div></div>
         <div className="overview-toolbar no-drag">
-          <div className="overview-heading"><span>{rows.length} 个对话</span><span className="overview-view-label">{groupedView ? '按状态分组' : '固定顺序'}</span></div>
+          <div className="overview-heading"><Button type="text" className="return-trends-button" icon={<ArrowLeftOutlined/>} disabled={!conversation} onClick={() => linkedWorkspace.current?.select(null)} aria-label="返回全部趋势">全部趋势</Button><span>{rows.length} 个对话</span><span className="overview-view-label">{groupedView ? '按状态分组' : '固定顺序'}</span></div>
           <Tooltip title="均值按本机日期筛选；运行中的对话始终保留。" placement="bottomRight"><Select<Period> value={period} aria-label="统计时段" size="small" className="period-select" options={(Object.keys(periodLabels) as Period[]).map((value) => ({ value, label: periodLabels[value] }))} onChange={(value) => { captureReadingLayout(); setPeriod(value); setSelectedProfile(null); }} open={periodOpen} onOpenChange={setPeriodOpen} popupMatchSelectWidth={110} getPopupContainer={() => document.body} /></Tooltip>
         </div>
         <span id="conversation-order-hint" className="sr-only">{groupedView ? '按运行状态分组，组内顺序固定。拖左侧把手，或聚焦把手后用 Alt 加上、下箭头调整同组顺序。' : '顺序固定，状态原地更新。拖左侧把手，或聚焦把手后用 Alt 加上、下箭头调整顺序。'}</span>
-        <ReactLenis ref={overviewScroll} className="overview-scroll no-drag" data-list-view={groupedView ? 'grouped' : 'fixed'} options={scrollOptions} onScroll={(event) => { overviewPosition.current = event.currentTarget.scrollTop; }} onDragOver={(event) => {
+        <ReactLenis ref={overviewScroll} className="overview-scroll no-drag" data-list-view={groupedView ? 'grouped' : 'fixed'} options={scrollOptions} onDragOver={(event) => {
           if ((event.target as HTMLElement).closest('[data-conversation-id]')) return;
           event.preventDefault();
           if (!internalDrag(event) || !canReorder || groupedView) { event.dataTransfer.dropEffect = 'none'; dragTarget.current = null; setDropTarget(null); return; }
@@ -643,16 +543,26 @@ export default function App() {
             setDropTarget(dragTarget.current);
           }
         }} onDrop={(event) => { const target = dragTarget.current; if (target) dropDrag(event, target.id); else { event.preventDefault(); finishDrag(); } }} tabIndex={0} aria-label="全部对话列表，可上下滚动">
-          {!orderReady ? <div className="overview-empty" role="status"><strong>正在读取列表顺序…</strong><span>读回保存的顺序后再显示。</span></div> : !groupedView ? rows.length ? renderCards(rows) : <div className="overview-empty" role="status"><strong>{!isAvailable ? '统计暂时不可用' : snapshot.status === 'waiting' ? '正在等待本机对话' : '暂未发现对话'}</strong><span>{snapshot.message || '发现运行记录后会自动显示在这里。'}</span></div> : (['running', 'idle', 'unknown'] as Group[]).map((group) => <section className={`conversation-group group-${group}`} data-group={group} key={group}>
-            <Button type="text" className="group-toggle" onClick={() => toggleGroup(group)} aria-label={`${openGroups[group] ? '折叠' : '展开'}${groupNames[group]}对话`} aria-expanded={openGroups[group]} aria-controls={`group-${group}-body`}>
-              <span className="group-label"><RightOutlined className={openGroups[group] ? 'group-arrow is-open' : 'group-arrow'} /><span>{groupNames[group]}</span><b>{group === 'running' ? runningCount : groups[group].length}</b>{group === 'running' && pendingCount > 0 && <span className="group-pending">+ {pendingCount} 待确认</span>}</span>
-              <span className={`group-summary${group === 'idle' && groups.idle.some((item) => item.state === 'error') ? ' has-error' : ''}`}>{group === 'idle' ? `${groups.idle.filter((item) => item.state === 'error').length} 条异常` : group === 'unknown' ? '不判断为已停止' : pendingCount ? '等待记录 · 原位保留' : '生成 · 工具 · 等待'}</span>
-            </Button>
-            <div className="group-body" id={`group-${group}-body`} data-group-body={group} data-open={openGroups[group]} aria-hidden={!openGroups[group]} inert={!openGroups[group]} style={{ height: openGroups[group] ? 'auto' : 0 }}>
-              {groups[group].length ? renderCards(groups[group], group !== 'running') : group === 'running' && !rows.length ? <div className="overview-empty" role="status"><strong>{!isAvailable ? '统计暂时不可用' : snapshot.status === 'waiting' ? '正在等待本机对话' : '暂未发现对话'}</strong><span>{snapshot.message || '发现运行记录后会自动显示在这里。'}</span></div> : <div className="group-empty">{group === 'running' ? '暂无正在运行的对话' : group === 'idle' ? '暂无未运行的对话' : '没有需要确认的状态'}</div>}
-            </div>
-          </section>)}
+          {!orderReady ? <div className="overview-empty" role="status"><strong>正在读取列表顺序…</strong><span>读回保存的顺序后再显示。</span></div> : <LinkedWorkspace ref={linkedWorkspace}
+            rows={rows} groups={groups} groupedView={groupedView} openGroups={openGroups} conversation={conversation}
+            onSelect={id => id ? openConversation(id) : closeConversation()} onToggleGroup={toggleGroup}
+            period={period} histories={historyByConversation} chartProfile={chartProfile} now={now} available={isAvailable}
+            pendingRunning={pendingRunning} reorder={reorder} onDetails={() => setDetailsOpen(true)}
+            onCopyName={name => {void copyName(name);}} onPendingDismiss={id => {
+              captureReadingLayout(); restoreSelectionFocus.current = id; focusedHandle.current = false;
+              setMonitorView(previous => dismissPendingRunning(previous, id));
+              requestAnimationFrame(() => {
+                panel.current?.querySelector<HTMLElement>('.linked-state-toggle[data-group="unknown"]')?.focus({preventScroll: true});
+              });
+            }}
+            scrollRef={overviewScroll} reduced={reduced} paused={!expanded || detailsOpen}/>}
         </ReactLenis>
+        {groupedView && <nav className="linked-state-nav no-drag" aria-label="其他运行状态">
+          {(['idle', 'unknown'] as const).map(group => <Button type="text" key={group} className="linked-state-toggle" data-group={group}
+            aria-label={`${openGroups[group] ? '收起' : '查看'}${group === 'idle' ? '未运行' : '状态待确认'}对话`} aria-expanded={openGroups[group]} onClick={() => navigateGroup(group)}>
+            <DownOutlined rotate={openGroups[group] ? 180 : 0}/>{group === 'idle' ? '未运行' : '状态待确认'} <b>{groups[group].length}</b>
+          </Button>)}
+        </nav>}
         <Modal className="record-details-modal" open={detailsOpen && Boolean(conversation)} onCancel={() => {setDetailsOpen(false); setChartOpen(false); setProfileOpen(false);}} title="记录与配置" footer={null} width={640} centered styles={{body: {maxHeight: 'calc(100vh - 136px)', overflowY: 'auto', overflowX: 'hidden'}}}>
         {conversation && <div ref={detailScroll} className="detail-scroll no-drag" data-selected-conversation={conversation} aria-label="所选对话的输出详情">
           <div className="detail-heading"><div><h2 title={row?.label}>{row?.label || '对话记录'}</h2><span className={`conversation-state state-${row?.state || 'unknown'}`}>{row ? stateLabel(row) : '状态待确认'}</span></div><Tooltip title={copiedName ? '名称已复制' : '复制完整名称'}><Button type="text" className="copy-name-button" icon={<CopyOutlined/>} onClick={() => {if (row) void copyName(row.label);}} aria-label="复制完整对话名称"/></Tooltip><Button size="small" className="detail-chart-button" icon={<LineChartOutlined />} onClick={() => setChartOpen(true)} aria-label="放大输出速度图表">曲线</Button></div>
